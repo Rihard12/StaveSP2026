@@ -44,6 +44,54 @@ logging.basicConfig(
     format="%(asctime)s - %(message)s"
 )
 
+
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+
+def nalozi_config():
+    """Naloži nastavitve iz config.json, če obstaja."""
+    global NAPOVEDI_MAPA, REZULTATI_FILE, TEKME_FILE, LOG_FILE
+    global IME_CELL, DOMACI_COL, GOST_COL, TOCKE_COL, IME_COLUMN
+    global TEKME_SHEET_IDX, SKUPINE_SHEET_IDX
+    if not os.path.exists(CONFIG_FILE):
+        return
+    try:
+        import json
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        NAPOVEDI_MAPA     = cfg.get("NAPOVEDI_MAPA",     NAPOVEDI_MAPA)
+        REZULTATI_FILE    = cfg.get("REZULTATI_FILE",    REZULTATI_FILE)
+        TEKME_FILE        = cfg.get("TEKME_FILE",        TEKME_FILE)
+        IME_CELL          = cfg.get("IME_CELL",          IME_CELL)
+        DOMACI_COL        = cfg.get("DOMACI_COL",        DOMACI_COL)
+        GOST_COL          = cfg.get("GOST_COL",          GOST_COL)
+        TOCKE_COL         = cfg.get("TOCKE_COL",         TOCKE_COL)
+        IME_COLUMN        = cfg.get("IME_COLUMN",        IME_COLUMN)
+        TEKME_SHEET_IDX   = cfg.get("TEKME_SHEET_IDX",   TEKME_SHEET_IDX)
+        SKUPINE_SHEET_IDX = cfg.get("SKUPINE_SHEET_IDX", SKUPINE_SHEET_IDX)
+    except Exception as e:
+        print(f"Opozorilo: ni bilo mogoče naložiti config.json: {e}")
+
+def shrani_config():
+    """Shrani trenutne nastavitve v config.json."""
+    import json
+    cfg = {
+        "NAPOVEDI_MAPA":     NAPOVEDI_MAPA,
+        "REZULTATI_FILE":    REZULTATI_FILE,
+        "TEKME_FILE":        TEKME_FILE,
+        "IME_CELL":          IME_CELL,
+        "DOMACI_COL":        DOMACI_COL,
+        "GOST_COL":          GOST_COL,
+        "TOCKE_COL":         TOCKE_COL,
+        "IME_COLUMN":        IME_COLUMN,
+        "TEKME_SHEET_IDX":   TEKME_SHEET_IDX,
+        "SKUPINE_SHEET_IDX": SKUPINE_SHEET_IDX,
+    }
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+# Naloži config takoj ob zagonu
+nalozi_config()
+
 # ──────────────────────────────────────────────
 #  POSLOVNA LOGIKA  (enako kot original)
 # ──────────────────────────────────────────────
@@ -66,14 +114,16 @@ def napolni_slovar_imen():
     finally:
         app.quit()
 
-def obdelaj_tekmo(vrsticaNapovedi, goliDomaciRez, goliGostjeRez, stolpecRez, log_cb):
+def obdelaj_tekmo(vrsticaNapovedi, goliDomaciRez, goliGostjeRez, stolpecRez, log_cb, progress_cb=None):
     tipRez = vrni_tip(goliDomaciRez, goliGostjeRez)
     files  = [f for f in os.listdir(NAPOVEDI_MAPA) if f.endswith(".xlsx") and not f.startswith("~")]
+    skupaj = len(files)
+    stat = {3: 0, 1: 0, 0: 0, "napake": 0}
     app = xw.App(visible=False)
     try:
         wb  = app.books.open(REZULTATI_FILE)
         ws  = wb.sheets[0]
-        for file in files:
+        for i, file in enumerate(files):
             path = os.path.join(NAPOVEDI_MAPA, file)
             try:
                 wbn = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -92,24 +142,31 @@ def obdelaj_tekmo(vrsticaNapovedi, goliDomaciRez, goliGostjeRez, stolpecRez, log
                     tocke = 0
                 ws[f"{stolpecRez}{vr}"].value = tocke
                 wbn.close()
+                stat[tocke] += 1
                 logging.info(f"{ime} | {gd}:{gg} | {tocke} tock")
                 log_cb(f"✓  {ime}: {tocke} točk")
             except Exception as e:
+                stat["napake"] += 1
                 logging.error(f"NAPAKA {file}: {e}")
                 log_cb(f"✗  {file}: {e}")
+            if progress_cb: progress_cb(int((i + 1) / skupaj * 100))
         wb.save(REZULTATI_FILE)
         wb.close()
     finally:
         app.quit()
+    log_cb(f"\n── Povzetek ──────────────────────")
+    log_cb(f"Obdelanih: {skupaj - stat['napake']}/{skupaj}  |  3 točke: {stat[3]}  |  1 točka: {stat[1]}  |  0 točk: {stat[0]}  |  Napake: {stat['napake']}")
 
-def obdelaj_skupino(skupina, vrsticaNapoved, stolpecNapoved, stolpecRez, ekipe, log_cb):
+def obdelaj_skupino(skupina, vrsticaNapoved, stolpecNapoved, stolpecRez, ekipe, log_cb, progress_cb=None):
     files = [f for f in os.listdir(NAPOVEDI_MAPA) if f.endswith(".xlsx") and not f.startswith("~")]
     ekipeSeznam = [x.strip().upper() for x in ekipe]
+    skupaj = len(files)
+    stat = {8: 0, 6: 0, 4: 0, 2: 0, 0: 0, "napake": 0}
     app = xw.App(visible=False)
     try:
         wb  = app.books.open(REZULTATI_FILE)
         ws  = wb.sheets[0]
-        for file in files:
+        for i, file in enumerate(files):
             path = os.path.join(NAPOVEDI_MAPA, file)
             try:
                 wbn = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -120,22 +177,32 @@ def obdelaj_skupino(skupina, vrsticaNapoved, stolpecNapoved, stolpecRez, ekipe, 
                 points = 0
                 for idx in range(4):
                     napoved = wsn[f"{stolpecNapoved}{vrsticaNapoved + idx}"].value
-                    napoved = napoved.upper()
-                    match, _, _ = process.extractOne(napoved, ekipeSeznam)
+                    napoved = str(napoved).strip()
+                    match, procent = razreši_z_aliasi(napoved, ekipeSeznam, ekipe)
+                    if procent < PRAG_VALIDACIJE:
+                        log_cb(f"  ⚠  {ime}, mesto {idx+1}: '{napoved}' → '{match.title()}' ({procent:.0f}%) – preskočeno")
+                        logging.warning(f"{ime} | Skupina {skupina} | '{napoved}' → '{match}' ({procent:.0f}%) pod pragom")
+                        continue
                     if match == ekipeSeznam[idx]:
                         points += 2
                         col = get_column_letter(column_index_from_string(stolpecRez) + idx)
                         ws[f"{col}{vr}"].value = 2
+                stat[points] = stat.get(points, 0) + 1
                 logging.info(f"{ime} | Skupina {skupina} | {points} točk")
                 log_cb(f"✓  {ime}: {points} točk")
                 wbn.close()
             except Exception as e:
+                stat["napake"] += 1
                 logging.error(f"NAPAKA {file}: {e}")
                 log_cb(f"✗  {file}: {e}")
+            if progress_cb: progress_cb(int((i + 1) / skupaj * 100))
         wb.save(REZULTATI_FILE)
         wb.close()
     finally:
         app.quit()
+    tocke_dist = ", ".join(f"{t}t: {n}" for t, n in sorted((k, v) for k, v in stat.items() if isinstance(k, int) and v > 0))
+    log_cb(f"\n── Povzetek ──────────────────────")
+    log_cb(f"Obdelanih: {skupaj - stat['napake']}/{skupaj}  |  {tocke_dist}  |  Napake: {stat['napake']}")
 
 def napolni_imena(log_cb):
     vrstica = 3
@@ -330,6 +397,134 @@ def preberi_skupine_iz_excela():
     return skupine
 
 # ──────────────────────────────────────────────
+#  VALIDACIJA NAPOVEDI SKUPIN
+# ──────────────────────────────────────────────
+
+SKUPINE_SP2026 = {
+    "A": ["Mehika", "Južna Afrika", "Južna Koreja", "Češka"],
+    "B": ["Kanada", "Bosna in Hercegovina", "Katar", "Švica"],
+    "C": ["Brazilija", "Maroko", "Škotska", "Haiti"],
+    "D": ["Združene države Amerike", "Paragvaj", "Avstralija", "Turčija"],
+    "E": ["Nemčija", "Slonokoščena obala", "Ekvador", "Curacao"],
+    "F": ["Nizozemska", "Japonska", "Švedska", "Tunizija"],
+    "G": ["Belgija", "Egipt", "Iran", "Nova Zelandija"],
+    "H": ["Španija", "Urugvaj", "Savdska Arabija", "Zelenortski otoki"],
+    "I": ["Francija", "Senegal", "Irak", "Norveška"],
+    "J": ["Argentina", "Alžirija", "Avstrija", "Jordan"],
+    "K": ["Portugalska", "DR Kongo", "Uzbekistan", "Kolumbija"],
+    "L": ["Anglija", "Hrvaška", "Gana", "Panama"],
+}
+
+# Alternativna imena za ekipe (kratice, okrajšave, pogovorni izrazi)
+# Ključ je kanonično ime (mora biti enako kot v SKUPINE_SP2026), vrednost seznam aliasov
+ALIASI_EKIP = {
+    "BOSNA IN HERCEGOVINA": ["BIH", "BOSNA"],
+    "ZDRUŽENE DRŽAVE AMERIKE": ["ZDA", "USA", "AMERIKA"],
+    "SLONOKOŠČENA OBALA": ["IVORY COAST", "SLONOKOŠČENA O.", "CÔTE D'IVOIRE", "COTE D'IVOIRE", "SLONOK. OBALA", "SLONOKOSCEN O.", "SL.OBALA", "SLONOKOSCENA O."],
+    "JUŽNA KOREJA": ["KOREJA", "KOREA", "J KOREJA", "J. KOREJA", "J.KOREJA", "SOUTH KOREA", "J. KOREA"],
+    "JUŽNA AFRIKA": ["JAR", "RSA", "J. AFRIKA", "J AFRIKA", "J.AFRIKA", "JUŽNOAFRIŠKA REPUBLIKA", "SOUTH AFRICA", "J. AFRKA"],
+    "NOVA ZELANDIJA": ["N ZELANDIJA", "N. ZELANDIJA", "N.ZELANDIJA", "N.ZELENDIJA", "N. ZELENDIJA"],
+    "SAVDSKA ARABIJA": ["SAU.ARABIJA", "SAV. ARABIA", "S. ARABIJA", "SAV. ARABIJA", "SAV.ARABIJA", "S ARABIJA", "S.ARABIJA", "SAV ARABIJA", "SAU ARABIJA", "SA.ARABIJA", "SAUDI ARABIA", "SAU. ARABIJA"],
+    "ZELENORTSKI OTOKI": ["ZELENORTSKI O.", "Z. OTOKI", "CAPE VERDE", "ZELENORTSKI.O", "ZELENO R OTOKI", "ZELENOERTSKI", "KAPVERDSKI OTOKI", "ZEL.OTOKI", "ZELENORTSKI.O."],
+    "DR KONGO": ["DRC", "CONGO DR", "D.R. KONGO", "D.R.KONGO", "D. R. KONGO", "D.R.", "CONGO", "KONGO"],
+    "CURACAO": ["CURAÇAO"],
+    "FRANCIJA": ["FRANCOSKA"],
+    "PORTUGALSKA": ["PORTUGALIJA", "PORTUGAL"],
+    "NEMČIJA": ["NEMCIJA"],
+    "ČEŠKA": ["CESKA", "ČESKA"],
+    "JORDAN": ["JORDANIJA"],
+    "ALŽIRIJA": ["ALĐERIJA"],
+    "ŠVICA": ["SVICA"],
+    "KATAR": ["QATAR"],
+    "KANADA": ["CANADA"],
+    "MAROKO": ["MAROCO"],
+    "EGIPT": ["EGYPT"],
+    "AVSTRIJA": ["AUSTRIA"],
+    "HRVAŠKA": ["CROATIA"],
+    "IRAK": ["IRAQ"],
+    "ŠKOTSKA": ["SCOTLAND"],
+}
+
+def razreši_z_aliasi(vnos, ekipe_polna, ekipe_originalne):
+    """
+    Najprej preveri aliase – če vnos direktno ustreza aliasu, vrni 100%.
+    Sicer vrni najboljši fuzzy match.
+    ekipe_polna: seznam UPPER imen (za fuzzy)
+    ekipe_originalne: seznam originalnih imen (za alias lookup)
+    """
+    vnos_upper = vnos.strip().upper()
+
+    # Preveri aliase za vsako ekipo
+    for i, ime_orig in enumerate(ekipe_originalne):
+        aliasi = ALIASI_EKIP.get(ime_orig.upper(), [])
+        for alias in aliasi:
+            if vnos_upper == alias.upper():
+                return ekipe_polna[i], 100.0
+
+    # Fallback na fuzzy
+    match, procent, _ = process.extractOne(vnos_upper, ekipe_polna)
+    return match, float(procent)
+
+
+PRAG_VALIDACIJE = 75  # minimalni % ujemanja
+
+def validiraj_napovedi_skupin(skupine_ekipe, log_cb):
+    """
+    skupine_ekipe: seznam dict-ov {"skupina": "A", "stolpec": "X", "nap_stolpec": "Y",
+                                    "nap_vrstica": N, "ekipe": ["Ekipa1", ...]}
+    Gre čez vse napovedi in preverja ujemanje imen ekip v skupinah.
+    """
+    files = [f for f in os.listdir(NAPOVEDI_MAPA) if f.endswith(".xlsx") and not f.startswith("~")]
+    problemi = []
+    skupaj_datotek = len(files)
+    log_cb(f"Preverjam {skupaj_datotek} napovedi …\n")
+
+    for file in files:
+        path = os.path.join(NAPOVEDI_MAPA, file)
+        problemi_datoteke = []
+        try:
+            wbn = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            wsn = wbn.worksheets[0]
+            ime = wsn[IME_CELL].value.strip().title()
+
+            for sk in skupine_ekipe:
+                nst = str(sk["nap_stolpec"]).strip().upper()
+                nvr = int(sk["nap_vrstica"])
+                ekipe_originalne = [e.strip() for e in sk["ekipe"]]
+                ekipe_polne = [e.upper() for e in ekipe_originalne]
+
+                for idx in range(4):
+                    celica = wsn[f"{nst}{nvr + idx}"].value
+                    if celica is None:
+                        problemi_datoteke.append(
+                            f"  Skupina {sk['skupina']}, mesto {idx+1}: celica prazna")
+                        continue
+                    vnos = str(celica).strip()
+                    match, procent = razreši_z_aliasi(vnos, ekipe_polne, ekipe_originalne)
+                    if procent < PRAG_VALIDACIJE:
+                        problemi_datoteke.append(
+                            f"  Skupina {sk['skupina']}, mesto {idx+1}: "
+                            f"'{vnos}' → najbližje '{match.title()}' ({procent:.0f}%)")
+
+            wbn.close()
+
+            if problemi_datoteke:
+                problemi.append((ime, file, problemi_datoteke))
+
+        except Exception as e:
+            log_cb(f"✗  {file}: {e}")
+
+    if not problemi:
+        log_cb("✓  Vse napovedi so v redu – ni problematičnih vnosov.")
+    else:
+        log_cb(f"⚠  Najdenih {len(problemi)} datotek s problemi:\n")
+        for ime, file, pp in problemi:
+            log_cb(f"▸  {ime}  ({file})")
+            for p in pp:
+                log_cb(p)
+            log_cb("")
+
+# ──────────────────────────────────────────────
 #  GUI
 # ──────────────────────────────────────────────
 
@@ -361,8 +556,13 @@ class SP2026App(tk.Tk):
         self._build()
         self._refresh_globals()
         self.after(100, lambda: self._run_threaded(self._osveži_ob_zagonu))
+        self.protocol('WM_DELETE_WINDOW', self._ob_zapiranju)
 
     # ── GRADNJA ──────────────────────────────
+
+    def _ob_zapiranju(self):
+        shrani_config()
+        self.destroy()
 
     def _osveži_ob_zagonu(self):
         """Ob zagonu avtomatsko naloži tekme in skupine v ozadju."""
@@ -388,6 +588,7 @@ class SP2026App(tk.Tk):
             ("skupina",   "◈  Zaključi skupino"),
             ("imena",     "⊕  Naloži imena"),
             ("sortiraj",  "⇅  Sortiraj lestvico"),
+            ("preveri",   "🔍  Preveri napovedi"),
             ("nastavitve","⚙  Nastavitve"),
         ]
 
@@ -417,6 +618,7 @@ class SP2026App(tk.Tk):
         self._build_imena(self._frames["imena"])
         self._build_sortiraj(self._frames["sortiraj"])
         self._build_nastavitve(self._frames["nastavitve"])
+        self._build_preveri(self._frames["preveri"])
 
         self._show("tekma")
 
@@ -519,7 +721,9 @@ class SP2026App(tk.Tk):
 
         # Desna kartica – log
         right = self._card(parent, "Dnevnik", row=1, col=1)
-        self._tekma_log = self._log_box(right, rows=18)
+        self._tekma_log = self._log_box(right, rows=16)
+        self._tekma_progress = ttk.Progressbar(right, mode="determinate", maximum=100)
+        self._tekma_progress.pack(fill="x", pady=(6, 0))
 
     def _osveži_tekme(self):
         vse_tekme = preberi_tekme_iz_excela()
@@ -572,8 +776,10 @@ class SP2026App(tk.Tk):
         self._log(self._tekma_log, f"Stolpec rezultatov: {st}")
         self._log(self._tekma_log, f"\n▷  Začetek obdelave tekme …")
 
+        self._tekma_progress["value"] = 0
         def _po_obdelavi(log_cb):
-            obdelaj_tekmo(vr, gd, gg, st, log_cb)
+            def _progress(val): self.after(0, lambda: self._tekma_progress.configure(value=val))
+            obdelaj_tekmo(vr, gd, gg, st, log_cb, _progress)
             if izbrana and TEKME_FILE:
                 try:
                     oznaci_tekmo_obdelano(izbrana["vrstica_excela"])
@@ -626,18 +832,21 @@ class SP2026App(tk.Tk):
                  bg=CARD, fg=FG2, font=FONT_LABEL).pack(anchor="w", pady=(10, 2))
         self._s_ekipe = []
         for i in range(4):
-            v = tk.StringVar()
-            e = tk.Entry(left, textvariable=v, bg=DARK, fg=FG,
-                         insertbackground=FG, relief="flat",
-                         font=FONT_BODY, width=22)
-            e.pack(fill="x", ipady=4, pady=1)
-            self._s_ekipe.append(v)
+            v = tk.StringVar(value="— izberi —")
+            cb = ttk.Combobox(left, textvariable=v, state="readonly",
+                              font=FONT_BODY, width=28)
+            cb.pack(fill="x", ipady=4, pady=1)
+            cb.bind("<<ComboboxSelected>>", self._on_ekipa_select)
+            self._s_ekipe.append((v, cb))
+        self._s_ekipe_combos = [pair[1] for pair in self._s_ekipe]
 
         self._btn(left, "◈  Obdelaj skupino",
                   self._zacni_skupino, GREEN).pack(anchor="w", pady=(14, 0))
 
         right = self._card(parent, "Dnevnik", row=1, col=1)
-        self._skupina_log = self._log_box(right, rows=18)
+        self._skupina_log = self._log_box(right, rows=16)
+        self._skupina_progress = ttk.Progressbar(right, mode="determinate", maximum=100)
+        self._skupina_progress.pack(fill="x", pady=(6, 0))
 
     def _osveži_skupine(self):
         vse_skupine = preberi_skupine_iz_excela()
@@ -656,6 +865,35 @@ class SP2026App(tk.Tk):
         if idx < 0 or not hasattr(self, "_skupine_data"): return
         s = self._skupine_data[idx]
         self._izbrana_skupina = s
+        oznaka = str(s.get("skupina") or "").strip().upper()
+        ekipe = SKUPINE_SP2026.get(oznaka, [])
+        self._posodobi_ekipe_combo(ekipe)
+
+    def _posodobi_ekipe_combo(self, ekipe):
+        """Nastavi vrednosti vseh 4 dropdownov glede na ekipe izbrane skupine."""
+        # Poiščemo zadnje 4 Comboboxe v levi kartici
+        combos = self._s_ekipe_combos
+        for cb in combos:
+            cb["values"] = ekipe
+            cb.set("— izberi —")
+        for v, _ in self._s_ekipe:
+            v.set("— izberi —")
+
+    def _on_ekipa_select(self, _=None):
+        """Ob vsaki spremembi dropdowna posodobi razpoložljive možnosti v ostalih."""
+        izbrane = {v.get() for v, _ in self._s_ekipe if v.get() != "— izberi —"}
+        sk = getattr(self, "_izbrana_skupina", None)
+        if not sk: return
+        oznaka = str(sk.get("skupina") or "").strip().upper()
+        vse_ekipe = SKUPINE_SP2026.get(oznaka, [])
+        combos = self._s_ekipe_combos
+        for (var, cb) in self._s_ekipe:
+            trenutna = var.get()
+            mozne = ["— izberi —"] + [
+                e for e in vse_ekipe
+                if e not in izbrane or e == trenutna
+            ]
+            cb["values"] = mozne
 
     def _zacni_skupino(self):
         izbrana_s = getattr(self, "_izbrana_skupina", None)
@@ -675,16 +913,22 @@ class SP2026App(tk.Tk):
             messagebox.showerror("Napaka", "Stolpec rezultatov ni določen v excelu (stolpec B).")
             return
         vr = int(vr)
-        ekipe = [v.get().strip() for v in self._s_ekipe]
-        if any(e == "" for e in ekipe):
-            messagebox.showerror("Napaka", "Vnesti moraš vse 4 ekipe.")
+        ekipe = [v.get().strip().upper() for v, _ in self._s_ekipe]
+        if any(e in ("", "— IZBERI —") for e in ekipe):
+            messagebox.showerror("Napaka", "Izberi vse 4 ekipe.")
+            return
+        if len(set(ekipe)) < 4:
+            duplikati = [e for e in ekipe if ekipe.count(e) > 1]
+            messagebox.showerror("Napaka", f"Vsaka ekipa sme biti izbrana samo enkrat.\nDuplikat: {duplikati[0].title()}")
             return
         sk  = str(izbrana_s.get("skupina") or "").strip().upper()
         self._log(self._skupina_log, f"\n◈  Začetek obdelave skupine {sk} …")
 
+        self._skupina_progress["value"] = 0
         izbrana_s_ref = izbrana_s
         def _po_skupini(log_cb):
-            obdelaj_skupino(sk, vr, nst, rst, ekipe, log_cb)
+            def _progress(val): self.after(0, lambda: self._skupina_progress.configure(value=val))
+            obdelaj_skupino(sk, vr, nst, rst, ekipe, log_cb, _progress)
             if izbrana_s_ref.get("vrstica_excela") and TEKME_FILE:
                 try:
                     oznaci_skupino_obdelano(izbrana_s_ref["vrstica_excela"])
@@ -701,10 +945,14 @@ class SP2026App(tk.Tk):
                            lambda m: self.after(0, self._log, self._skupina_log, m))
 
     def _sprazni_skupino(self):
-        for v in self._s_ekipe:
-            v.set("")
+        for v, _ in self._s_ekipe:
+            v.set("— izberi —")
         self._izbrana_skupina = None
         self._skupina_combo.set("— izberi —")
+        # Počisti vrednosti v dropdownih ekip
+        combos = self._s_ekipe_combos
+        for cb in combos:
+            cb["values"] = []
 
     # ── STRAN: IMENA ──────────────────────────
 
@@ -786,6 +1034,78 @@ class SP2026App(tk.Tk):
         self._run_threaded(sortiraj_in_ostevilci,
                            lambda m: self.after(0, self._log, self._sort_log, m))
 
+    # ── STRAN: PREVERI NAPOVEDI ──────────────────
+
+    def _build_preveri(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=2)
+        parent.rowconfigure(1, weight=1)
+
+        tk.Label(parent, text="Preveri napovedi skupin",
+                 bg=DARK, fg=FG, font=FONT_HEAD,
+                 pady=16).grid(row=0, column=0, columnspan=2, sticky="w", padx=18)
+
+        left = self._card(parent, "Nastavitve", row=1, col=0)
+
+        tk.Label(left, text=(
+            "Preveri, ali napovedi vseh uporabnikov\n"
+            "vsebujejo prepoznavna imena ekip za vsako skupino.\n\n"
+            "Referenčna imena so vgrajena v kodo (SP 2026).\n"
+            "Problematični vnosi bodo izpisani v dnevniku."
+        ), bg=CARD, fg=FG2, font=FONT_LABEL, justify="left").pack(anchor="w", pady=(0, 16))
+
+        tk.Label(left, text="Prag ujemanja (%)", bg=CARD, fg=FG2,
+                 font=FONT_LABEL).pack(anchor="w", pady=(0, 1))
+        self._preveri_prag = tk.StringVar(value=str(PRAG_VALIDACIJE))
+        tk.Entry(left, textvariable=self._preveri_prag, bg=DARK, fg=FG,
+                 insertbackground=FG, relief="flat", font=FONT_BODY, width=6).pack(anchor="w", ipady=4)
+
+        tk.Label(left, text=(
+            "Priporočeno: 75\n"
+            "(nižje = manj strogo, višje = strožje)"
+        ), bg=CARD, fg=MUTED, font=FONT_LABEL).pack(anchor="w", pady=(2, 16))
+
+        self._btn(left, "🔍  Zaženi preverjanje",
+                  self._zacni_validacijo, ACCENT).pack(anchor="w")
+
+        right = self._card(parent, "Rezultati preverjanja", row=1, col=1)
+        self._preveri_log = self._log_box(right, rows=24)
+
+    def _zacni_validacijo(self):
+        global PRAG_VALIDACIJE
+        try:
+            PRAG_VALIDACIJE = int(self._preveri_prag.get())
+        except ValueError:
+            messagebox.showerror("Napaka", "Prag mora biti število med 0 in 100.")
+            return
+
+        # Poiščemo podatke skupin iz excela (stolpec napovedi, vrstica)
+        skupine_excel = {str(s["skupina"]).strip().upper(): s
+                         for s in preberi_skupine_iz_excela()}
+
+        skupine_ekipe = []
+        for oznaka, ekipe in SKUPINE_SP2026.items():
+            sk_data = skupine_excel.get(oznaka)
+            if sk_data is None:
+                self._log(self._preveri_log,
+                          f"⚠  Skupina {oznaka} ni najdena v excelu – preskočena.")
+                continue
+            skupine_ekipe.append({
+                "skupina":     oznaka,
+                "nap_stolpec": sk_data["nap_stolpec"],
+                "nap_vrstica": sk_data["nap_vrstica"],
+                "ekipe":       ekipe,
+            })
+
+        if not skupine_ekipe:
+            messagebox.showerror("Napaka", "Nobena skupina ni bila najdena v excelu.")
+            return
+
+        self._log(self._preveri_log,
+                  f"\n🔍  Začetek preverjanja {len(skupine_ekipe)} skupin …\n")
+        self._run_threaded(validiraj_napovedi_skupin, skupine_ekipe,
+                           lambda m: self.after(0, self._log, self._preveri_log, m))
+
     # ── STRAN: NASTAVITVE ─────────────────────
 
     def _build_nastavitve(self, parent):
@@ -859,6 +1179,7 @@ class SP2026App(tk.Tk):
             except Exception as e:
                 self.after(0, lambda: self._n_status.configure(
                     text=f"✗  Napaka pri nalaganju: {e}", fg=RED))
+        shrani_config()
         threading.Thread(target=_reload, daemon=True).start()
 
     def _refresh_globals(self):
@@ -898,10 +1219,16 @@ if __name__ == "__main__":
                  fieldbackground=DARK,
                  background=CARD,
                  foreground=FG,
-                 selectbackground=ACCENT,
-                 selectforeground=FG,
+                 selectbackground=DARK,
+                 selectforeground="#ffffff",
+                 insertcolor=FG,
                  arrowcolor=FG2)
-    
+    s.map("TCombobox",
+          fieldbackground=[("readonly", DARK), ("disabled", PANEL)],
+          foreground=[("readonly", FG), ("disabled", FG2)],
+          selectbackground=[("readonly", DARK)],
+          selectforeground=[("readonly", "#ffffff")])
+	  
     napolni_slovar_imen()
 
     app.mainloop()
