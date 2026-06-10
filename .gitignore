@@ -3,3 +3,7 @@
 /Rezultati/
 log.txt
 **~*
+*.exe
+/build/
+/dist/
+*.spec
