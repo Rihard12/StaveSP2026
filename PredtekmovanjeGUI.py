@@ -11,6 +11,12 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 import numpy as np
 from datetime import datetime
 
+try:
+    import pythoncom
+    _HAS_PYTHONCOM = True
+except ImportError:
+    _HAS_PYTHONCOM = False
+
 def get_base_dir():
     """Vrne mapo kjer je .exe (pri buildu) oz. kjer je gui.py (pri razvoju)."""
     if getattr(sys, 'frozen', False):
@@ -35,8 +41,16 @@ IME_COLUMN        = "B"
 TEKME_FILE        = os.path.join(BASE_DIR, "SP 2026 - tekme.xlsx")
 TEKME_SHEET_IDX   = 0    # Indeks lista za tekme
 SKUPINE_SHEET_IDX = 1    # Indeks lista za skupine
+IZLOCILNI_SHEET_IDX = 2  # Indeks lista za izločilne tekme (v TEKME_FILE)
+
+# Izločilni del
+NAPOVEDI_MAPA_IZL  = os.path.join(BASE_DIR, "NapovediIzlocilni")
+REZULTATI_FILE_IZL = os.path.join(BASE_DIR, "SP 2026 - izlocilni - rezultati.xlsx")
+IME_CELL_IZL       = "U3"
+IME_COLUMN_IZL     = "B"
 
 IMENA_VRSTICE     = {}
+IMENA_VRSTICE_IZL = {}
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -51,23 +65,29 @@ def nalozi_config():
     """Naloži nastavitve iz config.json, če obstaja."""
     global NAPOVEDI_MAPA, REZULTATI_FILE, TEKME_FILE, LOG_FILE
     global IME_CELL, DOMACI_COL, GOST_COL, TOCKE_COL, IME_COLUMN
-    global TEKME_SHEET_IDX, SKUPINE_SHEET_IDX
+    global TEKME_SHEET_IDX, SKUPINE_SHEET_IDX, IZLOCILNI_SHEET_IDX
+    global NAPOVEDI_MAPA_IZL, REZULTATI_FILE_IZL, IME_CELL_IZL, IME_COLUMN_IZL
     if not os.path.exists(CONFIG_FILE):
         return
     try:
         import json
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             cfg = json.load(f)
-        NAPOVEDI_MAPA     = cfg.get("NAPOVEDI_MAPA",     NAPOVEDI_MAPA)
-        REZULTATI_FILE    = cfg.get("REZULTATI_FILE",    REZULTATI_FILE)
-        TEKME_FILE        = cfg.get("TEKME_FILE",        TEKME_FILE)
-        IME_CELL          = cfg.get("IME_CELL",          IME_CELL)
-        DOMACI_COL        = cfg.get("DOMACI_COL",        DOMACI_COL)
-        GOST_COL          = cfg.get("GOST_COL",          GOST_COL)
-        TOCKE_COL         = cfg.get("TOCKE_COL",         TOCKE_COL)
-        IME_COLUMN        = cfg.get("IME_COLUMN",        IME_COLUMN)
-        TEKME_SHEET_IDX   = cfg.get("TEKME_SHEET_IDX",   TEKME_SHEET_IDX)
-        SKUPINE_SHEET_IDX = cfg.get("SKUPINE_SHEET_IDX", SKUPINE_SHEET_IDX)
+        NAPOVEDI_MAPA       = cfg.get("NAPOVEDI_MAPA",       NAPOVEDI_MAPA)
+        REZULTATI_FILE      = cfg.get("REZULTATI_FILE",      REZULTATI_FILE)
+        TEKME_FILE          = cfg.get("TEKME_FILE",          TEKME_FILE)
+        IME_CELL            = cfg.get("IME_CELL",            IME_CELL)
+        DOMACI_COL          = cfg.get("DOMACI_COL",          DOMACI_COL)
+        GOST_COL            = cfg.get("GOST_COL",            GOST_COL)
+        TOCKE_COL           = cfg.get("TOCKE_COL",           TOCKE_COL)
+        IME_COLUMN          = cfg.get("IME_COLUMN",          IME_COLUMN)
+        TEKME_SHEET_IDX     = cfg.get("TEKME_SHEET_IDX",     TEKME_SHEET_IDX)
+        SKUPINE_SHEET_IDX   = cfg.get("SKUPINE_SHEET_IDX",   SKUPINE_SHEET_IDX)
+        IZLOCILNI_SHEET_IDX = cfg.get("IZLOCILNI_SHEET_IDX", IZLOCILNI_SHEET_IDX)
+        NAPOVEDI_MAPA_IZL   = cfg.get("NAPOVEDI_MAPA_IZL",   NAPOVEDI_MAPA_IZL)
+        REZULTATI_FILE_IZL  = cfg.get("REZULTATI_FILE_IZL",  REZULTATI_FILE_IZL)
+        IME_CELL_IZL        = cfg.get("IME_CELL_IZL",        IME_CELL_IZL)
+        IME_COLUMN_IZL      = cfg.get("IME_COLUMN_IZL",      IME_COLUMN_IZL)
     except Exception as e:
         print(f"Opozorilo: ni bilo mogoče naložiti config.json: {e}")
 
@@ -75,16 +95,21 @@ def shrani_config():
     """Shrani trenutne nastavitve v config.json."""
     import json
     cfg = {
-        "NAPOVEDI_MAPA":     NAPOVEDI_MAPA,
-        "REZULTATI_FILE":    REZULTATI_FILE,
-        "TEKME_FILE":        TEKME_FILE,
-        "IME_CELL":          IME_CELL,
-        "DOMACI_COL":        DOMACI_COL,
-        "GOST_COL":          GOST_COL,
-        "TOCKE_COL":         TOCKE_COL,
-        "IME_COLUMN":        IME_COLUMN,
-        "TEKME_SHEET_IDX":   TEKME_SHEET_IDX,
-        "SKUPINE_SHEET_IDX": SKUPINE_SHEET_IDX,
+        "NAPOVEDI_MAPA":       NAPOVEDI_MAPA,
+        "REZULTATI_FILE":      REZULTATI_FILE,
+        "TEKME_FILE":          TEKME_FILE,
+        "IME_CELL":            IME_CELL,
+        "DOMACI_COL":          DOMACI_COL,
+        "GOST_COL":            GOST_COL,
+        "TOCKE_COL":           TOCKE_COL,
+        "IME_COLUMN":          IME_COLUMN,
+        "TEKME_SHEET_IDX":     TEKME_SHEET_IDX,
+        "SKUPINE_SHEET_IDX":   SKUPINE_SHEET_IDX,
+        "IZLOCILNI_SHEET_IDX": IZLOCILNI_SHEET_IDX,
+        "NAPOVEDI_MAPA_IZL":   NAPOVEDI_MAPA_IZL,
+        "REZULTATI_FILE_IZL":  REZULTATI_FILE_IZL,
+        "IME_CELL_IZL":        IME_CELL_IZL,
+        "IME_COLUMN_IZL":      IME_COLUMN_IZL,
     }
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -233,15 +258,78 @@ def napolni_imena(log_cb):
     log_cb(f"✓  Imena uspešno prebrana!")
     napolni_slovar_imen()
 
-def sortiraj_in_ostevilci(log_cb):
+def preberi_aktivne_in_izpadle_ekipe():
+    """
+    Vrne (preostale_ekipe, vse_kdaj_omenjene) na podlagi SP_2026_-_tekme.xlsx (list Izlocilni).
+    preostale_ekipe: množica imen ekip (UPPER), ki nastopajo v še neobdelanih tekmah.
+    """
+    preostale = set()
+    if TEKME_FILE and os.path.exists(TEKME_FILE):
+        try:
+            wb = openpyxl.load_workbook(TEKME_FILE, data_only=True)
+            ws = wb.worksheets[IZLOCILNI_SHEET_IDX]
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                stage, ekipa1, ekipa2, datum, obdelana = (row + (None,)*5)[:5]
+                if stage is None: break
+                if str(obdelana or "").upper() == "D":
+                    continue
+                if ekipa1: preostale.add(str(ekipa1).strip().upper())
+                if ekipa2: preostale.add(str(ekipa2).strip().upper())
+            wb.close()
+        except Exception:
+            pass
+    return preostale
+
+def igralec_je_izpadel(napoved_path, ime_cell, preostale_ekipe, tekme_neobdelane):
+    """
+    Preveri, ali ima igralec v svoji napovedi (datoteka napoved_path) vsaj eno ekipo,
+    ki je še med 'preostale_ekipe' (torej še lahko prinese točke).
+    Vrne True če je igralec izpadel (nobena njegova napovedana ekipa ni več aktivna).
+    tekme_neobdelane: seznam tekem (iz preberi_izlocilne_iz_excela), že filtriran na neobdelane.
+    """
+    if not preostale_ekipe:
+        return False  # ni podatkov o tekmah – ne moremo soditi, privzeto ne pobarvaj
+    try:
+        wb = openpyxl.load_workbook(napoved_path, read_only=True, data_only=True)
+        ws = wb.worksheets[0]
+        kandidat_najden = False
+        for t in tekme_neobdelane:
+            for polje in (t["polje_e1"], t["polje_e2"]):
+                if not polje: continue
+                col, row = razdeli_celico(polje)
+                if col is None: continue
+                celica = ws[f"{col}{row}"].value
+                if celica:
+                    kandidat_najden = True
+                    if str(celica).strip().upper() in preostale_ekipe:
+                        wb.close()
+                        return False  # ima vsaj eno aktivno ekipo
+        wb.close()
+        return kandidat_najden  # izpadel, samo če smo sploh kaj napovedi prebrali
+    except Exception:
+        return False
+
+def sortiraj_in_ostevilci(rezultati_file=None, napovedi_mapa=None,
+                            ime_cell=None, preveri_izpadle=False, log_cb=None,
+                            start_row=None):
+    """
+    Sortira in oštevilči lestvico v podanem excelu rezultatov.
+    Privzeto deluje na predtekmovanju (REZULTATI_FILE, start_row=3); za izločilni del podaj
+    rezultati_file=REZULTATI_FILE_IZL, napovedi_mapa=NAPOVEDI_MAPA_IZL,
+    ime_cell=IME_CELL_IZL, preveri_izpadle=True, start_row=4.
+    """
+    target_file = rezultati_file or REZULTATI_FILE
+    sr = start_row if start_row is not None else 3
+    if log_cb is None:
+        log_cb = lambda m: None
     app = xw.App(visible=False)
     try:
-        wb       = app.books.open(REZULTATI_FILE)
+        wb       = app.books.open(target_file)
         ws       = wb.sheets[0]
         last_row = ws.used_range.last_cell.row
         last_col = ws.used_range.last_cell.column
         # Izračunaj vsoto stolpcev D naprej in zapiši v C (zamenja =SUM formulo)
-        for row in range(3, last_row + 1):
+        for row in range(sr, last_row + 1):
             if ws.range((row, 2)).value is None: continue
             vrednosti = ws.range((row, 4), (row, last_col)).value
             if isinstance(vrednosti, (int, float)):
@@ -250,35 +338,76 @@ def sortiraj_in_ostevilci(log_cb):
             ws.range((row, 3)).value = vsota
 
         igralci  = []
-        for row in range(3, last_row + 1):
+        for row in range(sr, last_row + 1):
             vr = ws.range((row, 1), (row, last_col)).value
             if vr[1] is None: continue
             igralci.append(vr)
         igralci.sort(key=lambda x: x[2] if isinstance(x[2], (int, float)) else 0, reverse=True)
-        for idx, vr in enumerate(igralci, start=3):
+        for idx, vr in enumerate(igralci, start=sr):
             ws.range((idx, 1), (idx, last_col)).value = vr
         trenutno = 1
         prej     = None
-        for row in range(3, len(igralci) + 3):
+        for row in range(sr, len(igralci) + sr):
             tocke = ws.range((row, 3)).value
-            if row == 3:
+            if row == sr:
                 ws.range((row, 1)).value = "1."
             else:
                 if tocke == prej:
                     ws.range((row, 1)).value = ""
                 else:
-                    trenutno = row - 2
+                    trenutno = row - (sr - 1)
                     ws.range((row, 1)).value = f"{trenutno}."
             prej = tocke
-        wb.save(REZULTATI_FILE)
+
+        # Pobarvaj imena igralcev, ki ne morejo več doseči točk (vse njihove ekipe izpadle)
+        if preveri_izpadle and napovedi_mapa and os.path.exists(napovedi_mapa):
+            preostale_ekipe = preberi_aktivne_in_izpadle_ekipe()
+            tekme_neobdelane = [t for t in preberi_izlocilne_iz_excela()
+                                if str(t["obdelana"] or "").upper() != "D"]
+            files = {f.lower(): f for f in os.listdir(napovedi_mapa)
+                     if f.endswith(".xlsx") and not f.startswith("~")}
+            stevec_izpadlih = 0
+            for row in range(sr, len(igralci) + sr):
+                ime = ws.range((row, 2)).value
+                if not ime: continue
+                ime_norm = str(ime).strip().title()
+                # Poišči datoteko po imenu igralca
+                ujemanje = None
+                for fname in files.values():
+                    try:
+                        wbn = openpyxl.load_workbook(os.path.join(napovedi_mapa, fname),
+                                                       read_only=True, data_only=True)
+                        ime_v_datoteki = wbn.worksheets[0][ime_cell or IME_CELL_IZL].value
+                        wbn.close()
+                        if ime_v_datoteki and str(ime_v_datoteki).strip().title() == ime_norm:
+                            ujemanje = fname
+                            break
+                    except Exception:
+                        continue
+                izpadel = False
+                if ujemanje:
+                    path = os.path.join(napovedi_mapa, ujemanje)
+                    izpadel = igralec_je_izpadel(path, ime_cell or IME_CELL_IZL,
+                                                   preostale_ekipe, tekme_neobdelane)
+                barva = (220, 38, 38) if izpadel else (0, 0, 0)  # rdeča / črna
+                ws.range((row, 2)).font.color = barva
+                if izpadel:
+                    stevec_izpadlih += 1
+            log_cb(f"  {stevec_izpadlih} igralcev brez možnosti za nove točke (obarvani rdeče).")
+
+        wb.save(target_file)
         wb.close()
         log_cb("✓  Lestvica uspešno sortirana in oštevilčena.")
     except Exception as e:
         log_cb(f"✗  Napaka: {e}")
     finally:
         app.quit()
-    IMENA_VRSTICE.clear()
-    napolni_slovar_imen()
+    if not preveri_izpadle:
+        IMENA_VRSTICE.clear()
+        napolni_slovar_imen()
+    else:
+        IMENA_VRSTICE_IZL.clear()
+        napolni_slovar_imen_izl()
 
 def preberi_tekme_iz_excela():
     """Vrne seznam dict-ov iz lista Tekme v TEKME_FILE (vključno s številko vrstice)."""
@@ -395,6 +524,235 @@ def preberi_skupine_iz_excela():
                         "obdelana": obdelana, "vrstica_excela": row_idx})
     wb.close()
     return skupine
+
+# ──────────────────────────────────────────────
+#  IZLOČILNI DEL
+# ──────────────────────────────────────────────
+
+def napolni_slovar_imen_izl():
+    """Slovar imen igralcev -> vrstica, za excel rezultatov izločilnih."""
+    global IMENA_VRSTICE_IZL
+    app = xw.App(visible=False)
+    try:
+        wb  = app.books.open(REZULTATI_FILE_IZL)
+        ws  = wb.sheets[0]
+        imena = ws.range(f"{IME_COLUMN_IZL}4").expand("down").value
+        if imena:
+            if not isinstance(imena, list):
+                imena = [imena]
+            IMENA_VRSTICE_IZL = {ime.strip().title(): i for i, ime in enumerate(imena, start=4) if ime}
+        wb.close()
+    finally:
+        app.quit()
+
+def prenesi_v_izlocilne(log_cb):
+    """Prepiše imena in skupne točke iz REZULTATI_FILE (predtekmovanje) v REZULTATI_FILE_IZL."""
+    app = xw.App(visible=False)
+    try:
+        wb_pred  = app.books.open(REZULTATI_FILE)
+        ws_pred  = wb_pred.sheets[0]
+        last_row = ws_pred.used_range.last_cell.row
+
+        podatki = []
+        for row in range(3, last_row + 1):
+            mesto = ws_pred.range((row, 1)).value
+            ime   = ws_pred.range((row, 2)).value
+            tocke = ws_pred.range((row, 3)).value
+            if ime is None: continue
+            podatki.append((mesto, ime, tocke))
+        wb_pred.close()
+
+        wb_izl = app.books.open(REZULTATI_FILE_IZL)
+        ws_izl = wb_izl.sheets[0]
+        for i, (mesto, ime, tocke) in enumerate(podatki, start=4):
+            ws_izl.range((i, 1)).value = mesto
+            ws_izl.range((i, 2)).value = ime
+            ws_izl.range((i, 4)).value = tocke  # stolpec D = predtekmovanje
+            log_cb(f"✓  {ime}: {tocke} točk (predtekmovanje)")
+        wb_izl.save(REZULTATI_FILE_IZL)
+        wb_izl.close()
+    finally:
+        app.quit()
+    log_cb(f"\n── Povzetek ──────────────────────")
+    log_cb(f"Preneseno {len(podatki)} igralcev v izločilni del.")
+    napolni_slovar_imen_izl()
+
+def preberi_izlocilne_iz_excela():
+    """Vrne seznam dict-ov iz lista Izlocilni v TEKME_FILE."""
+    if not TEKME_FILE or not os.path.exists(TEKME_FILE):
+        return []
+    wb = openpyxl.load_workbook(TEKME_FILE, data_only=True)
+    ws = wb.worksheets[IZLOCILNI_SHEET_IDX]
+    tekme = []
+    for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        stage, ekipa1, ekipa2, datum, obdelana, polje_e1, polje_e2, polje_nap, st_tock, stolpec_rez = (row + (None,)*10)[:10]
+        if stage is None: break
+        tekme.append({
+            "stage": stage, "ekipa1": ekipa1, "ekipa2": ekipa2,
+            "datum": datum, "obdelana": obdelana,
+            "polje_e1": polje_e1, "polje_e2": polje_e2,
+            "polje_nap": polje_nap, "st_tock": st_tock,
+            "stolpec_rez": stolpec_rez, "vrstica_excela": row_idx,
+        })
+    wb.close()
+    return tekme
+
+def razdeli_celico(ref):
+    """'B9' -> ('B', 9)"""
+    import re
+    m = re.match(r"([A-Za-z]+)(\d+)", str(ref).strip())
+    if not m: return None, None
+    return m.group(1).upper(), int(m.group(2))
+
+def zapisi_napredujočo_ekipo(vrstica_excela, ime_ekipe, log_cb):
+    """
+    Po obdelavi tekme zapiše napovedano napredujočo ekipo v ustrezno polje
+    (Ekipa1/Ekipa2) naslednje tekme v TEKME_FILE, glede na ujemanje oznake celice
+    'polje_nap' te tekme s 'polje_e1'/'polje_e2' druge tekme.
+    """
+    if not TEKME_FILE or not os.path.exists(TEKME_FILE):
+        return
+    wb = openpyxl.load_workbook(TEKME_FILE)
+    ws = wb.worksheets[IZLOCILNI_SHEET_IDX]
+
+    polje_nap = ws.cell(row=vrstica_excela, column=8).value  # H = Polje napredujoče ekipe
+    if not polje_nap:
+        wb.close()
+        return
+
+    polje_nap = str(polje_nap).strip().upper()
+    zapisano = False
+    for row in ws.iter_rows(min_row=2, values_only=False):
+        polje_e1 = row[5].value  # F = Polje ekipe 1
+        polje_e2 = row[6].value  # G = Polje ekipe 2
+        if polje_e1 and str(polje_e1).strip().upper() == polje_nap:
+            ws.cell(row=row[0].row, column=2).value = ime_ekipe  # B = Ekipa1
+            zapisano = True
+            log_cb(f"  → {ime_ekipe} zapisana kot Ekipa1 v vrstici {row[0].row}")
+            break
+        if polje_e2 and str(polje_e2).strip().upper() == polje_nap:
+            ws.cell(row=row[0].row, column=3).value = ime_ekipe  # C = Ekipa2
+            zapisano = True
+            log_cb(f"  → {ime_ekipe} zapisana kot Ekipa2 v vrstici {row[0].row}")
+            break
+
+    wb.save(TEKME_FILE)
+    wb.close()
+    if not zapisano:
+        log_cb(f"  ⚠  Ni najdene naslednje tekme za polje {polje_nap} (morda finale/3.mesto že odigrano).")
+
+def oznaci_izlocilno_obdelano(vrstica_excela):
+    """Zapiše 'D' v stolpec 'Obdelana tekma' (E) za dano tekmo v TEKME_FILE."""
+    if not TEKME_FILE or not os.path.exists(TEKME_FILE):
+        return
+    wb = openpyxl.load_workbook(TEKME_FILE)
+    ws = wb.worksheets[IZLOCILNI_SHEET_IDX]
+    ws.cell(row=vrstica_excela, column=5).value = "D"
+    wb.save(TEKME_FILE)
+    wb.close()
+
+def obdelaj_izlocilno_tekmo(tekma, gd, gg, napredujoca_ekipa, log_cb, progress_cb=None):
+    """
+    Obdela eno izločilno tekmo za vse igralce.
+    tekma: dict iz preberi_izlocilne_iz_excela()
+    gd, gg: dejanski rezultat (90 min)
+    napredujoca_ekipa: dejanska ekipa ki gre naprej (lahko = ekipa z več goli, ali ob izenačenju ročno izbrana)
+    """
+    files = [f for f in os.listdir(NAPOVEDI_MAPA_IZL) if f.endswith(".xlsx") and not f.startswith("~")]
+    skupaj = len(files)
+    stat = {"tip": 0, "rezultat": 0, "napredovanje": 0, "nic": 0, "napake": 0}
+
+    col_e1, row_e1 = razdeli_celico(tekma["polje_e1"])
+    col_e2, row_e2 = razdeli_celico(tekma["polje_e2"])
+    col_nap, row_nap = razdeli_celico(tekma["polje_nap"])
+    col_rez_tip  = tekma["stolpec_rez"]
+    col_rez_nap  = get_column_letter(column_index_from_string(col_rez_tip) + 1)
+    st_tock_nap  = tekma["st_tock"]
+
+    ekipa1, ekipa2 = tekma["ekipa1"], tekma["ekipa2"]
+    ekipe_originalne = [ekipa1, ekipa2]
+    ekipe_polne = [str(e).upper() for e in ekipe_originalne]
+
+    tip_rez = vrni_tip(gd, gg)
+
+    app = xw.App(visible=False)
+    try:
+        wb = app.books.open(REZULTATI_FILE_IZL)
+        ws = wb.sheets[0]
+
+        for i, file in enumerate(files):
+            path = os.path.join(NAPOVEDI_MAPA_IZL, file)
+            try:
+                wbn = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                wsn = wbn.worksheets[0]
+                ime = wsn[IME_CELL_IZL].value.strip().title()
+                vr  = IMENA_VRSTICE_IZL.get(ime)
+                if vr is None: raise Exception("Ime ni najdeno!")
+
+                # Preberi napoved imen ekip
+                celica_e1 = wsn[f"{col_e1}{row_e1}"].value
+                celica_e2 = wsn[f"{col_e2}{row_e2}"].value
+                napoved_e1 = str(celica_e1).strip() if celica_e1 else ""
+                napoved_e2 = str(celica_e2).strip() if celica_e2 else ""
+
+                match_e1, proc_e1 = razreši_z_aliasi(napoved_e1, ekipe_polne, ekipe_originalne) if napoved_e1 else (None, 0)
+                match_e2, proc_e2 = razreši_z_aliasi(napoved_e2, ekipe_polne, ekipe_originalne) if napoved_e2 else (None, 0)
+
+                pravilen_par = (proc_e1 >= PRAG_VALIDACIJE and proc_e2 >= PRAG_VALIDACIJE and
+                                match_e1 == ekipe_polne[0] and match_e2 == ekipe_polne[1])
+
+                # Preberi napovedan rezultat (gol je en stolpec desno od imena)
+                gol1 = wsn[f"{get_column_letter(column_index_from_string(col_e1)+1)}{row_e1}"].value
+                gol2 = wsn[f"{get_column_letter(column_index_from_string(col_e2)+1)}{row_e2}"].value
+
+                tocke_tekma = 0
+                if pravilen_par:
+                    try:
+                        gol1n, gol2n = int(gol1), int(gol2)
+                        if gol1n == gd and gol2n == gg:
+                            tocke_tekma = 6
+                            stat["rezultat"] += 1
+                        elif vrni_tip(gol1n, gol2n) == tip_rez:
+                            tocke_tekma = 3
+                            stat["tip"] += 1
+                        else:
+                            stat["nic"] += 1
+                    except (TypeError, ValueError):
+                        stat["nic"] += 1
+                else:
+                    stat["nic"] += 1
+
+                ws.range(f"{col_rez_tip}{vr}").value = tocke_tekma
+
+                # Napovedana napredujoča ekipa
+                celica_nap = wsn[f"{col_nap}{row_nap}"].value
+                napoved_nap = str(celica_nap).strip() if celica_nap else ""
+                tocke_nap = 0
+                if napoved_nap:
+                    match_nap, proc_nap = razreši_z_aliasi(napoved_nap, ekipe_polne, ekipe_originalne)
+                    if proc_nap >= PRAG_VALIDACIJE and match_nap == str(napredujoca_ekipa).upper():
+                        tocke_nap = st_tock_nap
+                        stat["napredovanje"] += 1
+                ws.range(f"{col_rez_nap}{vr}").value = tocke_nap
+
+                wbn.close()
+                logging.info(f"{ime} | {tekma['stage']} {ekipa1}:{ekipa2} | tekma={tocke_tekma}, napr={tocke_nap}")
+                log_cb(f"✓  {ime}: {tocke_tekma} (tekma) + {tocke_nap} (napredovanje)")
+            except Exception as e:
+                stat["napake"] += 1
+                logging.error(f"NAPAKA {file}: {e}")
+                log_cb(f"✗  {file}: {e}")
+            if progress_cb: progress_cb(int((i + 1) / skupaj * 100))
+
+        wb.save(REZULTATI_FILE_IZL)
+        wb.close()
+    finally:
+        app.quit()
+
+    log_cb(f"\n── Povzetek ──────────────────────")
+    log_cb(f"Obdelanih: {skupaj - stat['napake']}/{skupaj}  |  "
+           f"6t (rezultat): {stat['rezultat']}  |  3t (tip): {stat['tip']}  |  "
+           f"0t: {stat['nic']}  |  Napredovanje: {stat['napredovanje']}  |  Napake: {stat['napake']}")
 
 # ──────────────────────────────────────────────
 #  VALIDACIJA NAPOVEDI SKUPIN
@@ -565,10 +923,19 @@ class SP2026App(tk.Tk):
         self.destroy()
 
     def _osveži_ob_zagonu(self):
-        """Ob zagonu avtomatsko naloži tekme in skupine v ozadju."""
+        """Ob zagonu avtomatsko naloži tekme, skupine in slovarje imen v ozadju."""
+        try:
+            napolni_slovar_imen()
+        except Exception:
+            pass
+        try:
+            napolni_slovar_imen_izl()
+        except Exception:
+            pass
         if TEKME_FILE and os.path.exists(TEKME_FILE):
-            self.after(0, self._osveži_tekme)
-            self.after(0, self._osveži_skupine)
+            self._osveži_tekme()
+            self._osveži_skupine()
+            self._osveži_izlocilne()
 
     def _build(self):
         # Leva navigacija
@@ -589,6 +956,8 @@ class SP2026App(tk.Tk):
             ("imena",     "⊕  Naloži imena"),
             ("sortiraj",  "⇅  Sortiraj lestvico"),
             ("preveri",   "🔍  Preveri napovedi"),
+            ("prenesi",   "⤴  Prenesi v izločilne"),
+            ("izlocilna", "🏆  Vnesi izločilno"),
             ("nastavitve","⚙  Nastavitve"),
         ]
 
@@ -619,6 +988,8 @@ class SP2026App(tk.Tk):
         self._build_sortiraj(self._frames["sortiraj"])
         self._build_nastavitve(self._frames["nastavitve"])
         self._build_preveri(self._frames["preveri"])
+        self._build_prenesi(self._frames["prenesi"])
+        self._build_izlocilna(self._frames["izlocilna"])
 
         self._show("tekma")
 
@@ -662,6 +1033,7 @@ class SP2026App(tk.Tk):
         box.insert("end", msg + "\n")
         box.see("end")
         box.configure(state="disabled")
+        self.update_idletasks()
 
     def _btn(self, parent, text, cmd, color=ACCENT):
         return tk.Button(
@@ -672,8 +1044,19 @@ class SP2026App(tk.Tk):
             activebackground=DARK, activeforeground=FG
         )
 
-    def _run_threaded(self, fn, *args):
-        threading.Thread(target=fn, args=args, daemon=True).start()
+    def _run_threaded(self, fn, *args, **kwargs):
+        """
+        Poženemo funkcijo direktno (brez ločenega threada).
+        Excel COM (xlwings) se v praksi ne zažene zanesljivo iz ozadnjega
+        threada na Windows, zato vse akcije tečejo sinhrono v glavnem GUI threadu.
+        GUI se med izvajanjem ne odziva, kar je sprejemljivo glede na trajanje akcij.
+        """
+        self.update_idletasks()
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:
+            logging.error(f"Napaka pri izvajanju {getattr(fn, '__name__', fn)}: {e}")
+            raise
 
     # ── STRAN: TEKMA ──────────────────────────
 
@@ -778,21 +1161,23 @@ class SP2026App(tk.Tk):
 
         self._tekma_progress["value"] = 0
         def _po_obdelavi(log_cb):
-            def _progress(val): self.after(0, lambda: self._tekma_progress.configure(value=val))
+            def _progress(val):
+                self._tekma_progress.configure(value=val)
+                self.update_idletasks()
             obdelaj_tekmo(vr, gd, gg, st, log_cb, _progress)
             if izbrana and TEKME_FILE:
                 try:
                     oznaci_tekmo_obdelano(izbrana["vrstica_excela"])
-                    self.after(0, self._log, self._tekma_log,
+                    self._log(self._tekma_log,
                                f"✓  Tekma označena kot obdelana v excelu.")
-                    self.after(0, self._osveži_tekme)
-                    self.after(0, self._sprazni_tekmo)
+                    self._osveži_tekme()
+                    self._sprazni_tekmo()
                 except Exception as e:
-                    self.after(0, self._log, self._tekma_log,
+                    self._log(self._tekma_log,
                                f"⚠  Ni uspelo označiti tekme: {e}")
 
         self._run_threaded(_po_obdelavi,
-                           lambda m: self.after(0, self._log, self._tekma_log, m))
+                           lambda m: self._log(self._tekma_log, m))
 
     def _sprazni_tekmo(self):
         self._t_domaci.set("")
@@ -927,22 +1312,23 @@ class SP2026App(tk.Tk):
         self._skupina_progress["value"] = 0
         izbrana_s_ref = izbrana_s
         def _po_skupini(log_cb):
-            def _progress(val): self.after(0, lambda: self._skupina_progress.configure(value=val))
+            def _progress(val):
+                self._skupina_progress.configure(value=val)
+                self.update_idletasks()
             obdelaj_skupino(sk, vr, nst, rst, ekipe, log_cb, _progress)
             if izbrana_s_ref.get("vrstica_excela") and TEKME_FILE:
                 try:
                     oznaci_skupino_obdelano(izbrana_s_ref["vrstica_excela"])
-                    self.after(0, self._log, self._skupina_log,
+                    self._log(self._skupina_log,
                                f"✓  Skupina {sk} označena kot obdelana v excelu.")
-                    self.after(0, self._osveži_skupine)
-                    
-                    self.after(0, self._sprazni_skupino)
+                    self._osveži_skupine()
                 except Exception as e:
-                    self.after(0, self._log, self._skupina_log,
+                    self._log(self._skupina_log,
                                f"⚠  Ni uspelo označiti skupine: {e}")
+            self._sprazni_skupino()
 
         self._run_threaded(_po_skupini,
-                           lambda m: self.after(0, self._log, self._skupina_log, m))
+                           lambda m: self._log(self._skupina_log, m))
 
     def _sprazni_skupino(self):
         for v, _ in self._s_ekipe:
@@ -984,10 +1370,10 @@ class SP2026App(tk.Tk):
             ok, razlog = preveri_rezultati_prazni()
             if not ok:
                 # Prikaži opozorilo in ponudi možnost nadaljevanja
-                nadaljuj = self.after(0, self._vprasaj_prepisovanje, razlog)
+                self._vprasaj_prepisovanje(razlog)
             else:
-                self.after(0, self._log, self._imenа_log, "\n⊕  Nalaganje imen …")
-                napolni_imena(lambda m: self.after(0, self._log, self._imenа_log, m))
+                self._log(self._imenа_log, "\n⊕  Nalaganje imen …")
+                napolni_imena(lambda m: self._log(self._imenа_log, m))
 
         self._run_threaded(_preveri_in_naloži)
 
@@ -1001,7 +1387,7 @@ class SP2026App(tk.Tk):
         if odg:
             self._log(self._imenа_log, "\n⚠  Prepisovanje imen …")
             self._run_threaded(napolni_imena,
-                               lambda m: self.after(0, self._log, self._imenа_log, m))
+                               lambda m: self._log(self._imenа_log, m))
         else:
             self._log(self._imenа_log, "↩  Nalaganje preklicano.")
 
@@ -1009,30 +1395,59 @@ class SP2026App(tk.Tk):
 
     def _build_sortiraj(self, parent):
         parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=1)
         parent.rowconfigure(1, weight=1)
 
         tk.Label(parent, text="Sortiraj in oštevilči lestvico",
                  bg=DARK, fg=FG, font=FONT_HEAD,
-                 pady=16).grid(row=0, column=0, sticky="w", padx=18)
+                 pady=16).grid(row=0, column=0, columnspan=2, sticky="w", padx=18)
 
-        card = self._card(parent, "Akcija", row=1, col=0)
+        # Kartica – predtekmovanje
+        left = self._card(parent, "Predtekmovanje", row=1, col=0)
 
-        tk.Label(card, text=(
+        tk.Label(left, text=(
             "Razvrsti vse vrstice po skupnem seštevku točk (stolpec C)\n"
-            "in doda ustrezne ozake mest v stolpec A.\n\n"
+            "in doda ustrezne oznake mest v stolpec A.\n\n"
             "Pri enakem številu točk se mesto podvoji, vmesna mesta so prazna."
         ), bg=CARD, fg=FG2, font=FONT_LABEL, justify="left").pack(
             anchor="w", pady=(0, 12))
 
-        self._btn(card, "⇅  Sortiraj zdaj",
+        self._btn(left, "⇅  Sortiraj predtekmovanje",
                   self._zacni_sortiranje, ACCENT).pack(anchor="w")
 
-        self._sort_log = self._log_box(card, rows=16)
+        self._sort_log = self._log_box(left, rows=14)
+
+        # Kartica – izločilni del
+        right = self._card(parent, "Izločilni del", row=1, col=1)
+
+        tk.Label(right, text=(
+            "Enako kot pri predtekmovanju, dodatno pa obarva\n"
+            "imena igralcev rdeče, če nobena njihova napovedana\n"
+            "ekipa ni več v igri (ni mogoče doseči novih točk)."
+        ), bg=CARD, fg=FG2, font=FONT_LABEL, justify="left").pack(
+            anchor="w", pady=(0, 12))
+
+        self._btn(right, "⇅  Sortiraj izločilne",
+                  self._zacni_sortiranje_izl, ACCENT).pack(anchor="w")
+
+        self._sort_log_izl = self._log_box(right, rows=14)
 
     def _zacni_sortiranje(self):
         self._log(self._sort_log, "\n⇅  Sortiranje …")
         self._run_threaded(sortiraj_in_ostevilci,
-                           lambda m: self.after(0, self._log, self._sort_log, m))
+                           log_cb=lambda m: self._log(self._sort_log, m))
+
+    def _zacni_sortiranje_izl(self):
+        self._log(self._sort_log_izl, "\n⇅  Sortiranje izločilnega dela …")
+        self._run_threaded(
+            sortiraj_in_ostevilci,
+            rezultati_file=REZULTATI_FILE_IZL,
+            napovedi_mapa=NAPOVEDI_MAPA_IZL,
+            ime_cell=IME_CELL_IZL,
+            preveri_izpadle=True,
+            start_row=4,
+            log_cb=lambda m: self._log(self._sort_log_izl, m)
+        )
 
     # ── STRAN: PREVERI NAPOVEDI ──────────────────
 
@@ -1104,14 +1519,206 @@ class SP2026App(tk.Tk):
         self._log(self._preveri_log,
                   f"\n🔍  Začetek preverjanja {len(skupine_ekipe)} skupin …\n")
         self._run_threaded(validiraj_napovedi_skupin, skupine_ekipe,
-                           lambda m: self.after(0, self._log, self._preveri_log, m))
+                           lambda m: self._log(self._preveri_log, m))
+
+    # ── STRAN: PRENESI V IZLOČILNE ────────────────
+
+    def _build_prenesi(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+
+        tk.Label(parent, text="Prenesi v izločilni del",
+                 bg=DARK, fg=FG, font=FONT_HEAD,
+                 pady=16).grid(row=0, column=0, sticky="w", padx=18)
+
+        card = self._card(parent, "Akcija", row=1, col=0)
+
+        tk.Label(card, text=(
+            "Prenese imena in skupne točke vseh igralcev\n"
+            "iz excela predtekmovanja v excel izločilnih bojev\n"
+            "(stolpec A: mesto, B: ime, D: točke predtekmovanja).\n\n"
+            "Obstoječa vsebina v izločilnem excelu bo prepisana."
+        ), bg=CARD, fg=FG2, font=FONT_LABEL, justify="left").pack(
+            anchor="w", pady=(0, 12))
+
+        self._btn(card, "⤴  Prenesi podatke",
+                  self._zacni_prenesi, ACCENT).pack(anchor="w")
+
+        self._prenesi_log = self._log_box(card, rows=16)
+
+    def _zacni_prenesi(self):
+        self._log(self._prenesi_log, "\n⤴  Prenašanje podatkov …")
+        self._run_threaded(prenesi_v_izlocilne,
+                           lambda m: self._log(self._prenesi_log, m))
+
+    # ── STRAN: VNESI IZLOČILNO TEKMO ──────────────
+
+    def _build_izlocilna(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=1)
+        parent.rowconfigure(1, weight=1)
+
+        tk.Label(parent, text="Vnesi izločilno tekmo",
+                 bg=DARK, fg=FG, font=FONT_HEAD,
+                 pady=16).grid(row=0, column=0, columnspan=2, sticky="w", padx=18)
+
+        left = self._card(parent, "Podatki tekme", row=1, col=0)
+
+        tk.Label(left, text="Tekma iz excela", bg=CARD,
+                 fg=FG2, font=FONT_LABEL).pack(anchor="w", pady=(6, 1))
+        self._izl_var = tk.StringVar(value="— izberi —")
+        self._izl_combo = ttk.Combobox(
+            left, textvariable=self._izl_var,
+            state="readonly", font=FONT_BODY, width=48
+        )
+        self._izl_combo.pack(fill="x", ipady=4)
+        self._izl_combo.bind("<<ComboboxSelected>>", self._on_izl_select)
+        self._btn(left, "↻  Osveži seznam", self._osveži_izlocilne).pack(
+            anchor="w", pady=(4, 10))
+
+        ttk.Separator(left, orient="horizontal").pack(fill="x", pady=8)
+
+        self._izl_lbl_domaci = tk.Label(left, text="Goli ekipa 1", bg=CARD, fg=FG2, font=FONT_LABEL)
+        self._izl_lbl_domaci.pack(anchor="w", pady=(6, 1))
+        self._izl_gd = tk.StringVar()
+        tk.Entry(left, textvariable=self._izl_gd, bg=DARK, fg=FG,
+                 insertbackground=FG, relief="flat", font=FONT_BODY, width=22).pack(fill="x", ipady=5)
+
+        self._izl_lbl_gostje = tk.Label(left, text="Goli ekipa 2", bg=CARD, fg=FG2, font=FONT_LABEL)
+        self._izl_lbl_gostje.pack(anchor="w", pady=(6, 1))
+        self._izl_gg = tk.StringVar()
+        tk.Entry(left, textvariable=self._izl_gg, bg=DARK, fg=FG,
+                 insertbackground=FG, relief="flat", font=FONT_BODY, width=22).pack(fill="x", ipady=5)
+
+        self._izl_izenaceno = tk.BooleanVar(value=False)
+        self._izl_check = tk.Checkbutton(
+            left, text="Izenačeno – izberi kdo gre naprej",
+            variable=self._izl_izenaceno, command=self._on_izl_izenaceno,
+            bg=CARD, fg=FG2, selectcolor=DARK, activebackground=CARD,
+            activeforeground=FG, font=FONT_LABEL
+        )
+        self._izl_check.pack(anchor="w", pady=(10, 2))
+
+        self._izl_nap_var = tk.StringVar(value="— izberi —")
+        self._izl_nap_combo = ttk.Combobox(
+            left, textvariable=self._izl_nap_var,
+            state="disabled", font=FONT_BODY, width=28
+        )
+        self._izl_nap_combo.pack(fill="x", ipady=4)
+
+        self._btn(left, "🏆  Obdelaj tekmo",
+                  self._zacni_izlocilno, GREEN).pack(anchor="w", pady=(14, 0))
+
+        right = self._card(parent, "Dnevnik", row=1, col=1)
+        self._izl_log = self._log_box(right, rows=16)
+        self._izl_progress = ttk.Progressbar(right, mode="determinate", maximum=100)
+        self._izl_progress.pack(fill="x", pady=(6, 0))
+
+    def _osveži_izlocilne(self):
+        vse = preberi_izlocilne_iz_excela()
+        # Prikaži samo tiste z obema ekipama znanima in neobdelane
+        self._izl_data = [
+            t for t in vse
+            if t["ekipa1"] and t["ekipa2"] and str(t["obdelana"] or "").upper() != "D"
+        ]
+        vrednosti = [
+            f"{t['stage']} – {t['ekipa1']} : {t['ekipa2']}"
+            for t in self._izl_data
+        ]
+        self._izl_combo["values"] = vrednosti
+        self._izl_combo.set("— izberi —")
+        self._izbrana_izl = None
+        if hasattr(self, "_izl_lbl_domaci"):
+            self._izl_lbl_domaci.configure(text="Goli ekipa 1")
+            self._izl_lbl_gostje.configure(text="Goli ekipa 2")
+        skupaj = len(vse)
+        pripravljenih = len(self._izl_data)
+        self._log(self._izl_log,
+                  f"Naloženih {pripravljenih} pripravljenih tekem (od {skupaj} skupaj, "
+                  f"ostale še čakajo na znane ekipe).")
+
+    def _on_izl_select(self, _=None):
+        idx = self._izl_combo.current()
+        if idx < 0 or not hasattr(self, "_izl_data"): return
+        t = self._izl_data[idx]
+        self._izbrana_izl = t
+        self._izl_lbl_domaci.configure(text=f"Goli ekipa 1  –  {t['ekipa1']}")
+        self._izl_lbl_gostje.configure(text=f"Goli ekipa 2  –  {t['ekipa2']}")
+        self._izl_nap_combo["values"] = [t["ekipa1"], t["ekipa2"]]
+        self._izl_nap_combo.set("— izberi —")
+        self._log(self._izl_log,
+                  f"Izbrana tekma: {t['stage']} {t['ekipa1']} : {t['ekipa2']}  "
+                  f"[stolpec: {t['stolpec_rez']}, točke napr.: {t['st_tock']}]")
+
+    def _on_izl_izenaceno(self):
+        if self._izl_izenaceno.get():
+            self._izl_nap_combo.configure(state="readonly")
+        else:
+            self._izl_nap_combo.configure(state="disabled")
+            self._izl_nap_combo.set("— izberi —")
+
+    def _zacni_izlocilno(self):
+        try:
+            gd = int(self._izl_gd.get())
+            gg = int(self._izl_gg.get())
+        except ValueError:
+            messagebox.showerror("Napaka", "Preverite vnose (goli morajo biti številke).")
+            return
+
+        izbrana = getattr(self, "_izbrana_izl", None)
+        if not izbrana:
+            messagebox.showerror("Napaka", "Najprej izberi tekmo iz seznama.")
+            return
+
+        if gd == gg:
+            if not self._izl_izenaceno.get():
+                messagebox.showerror("Napaka", "Rezultat je izenačen – obkljukaj 'Izenačeno' in izberi kdo gre naprej.")
+                return
+            napredujoca = self._izl_nap_var.get()
+            if napredujoca not in (izbrana["ekipa1"], izbrana["ekipa2"]):
+                messagebox.showerror("Napaka", "Izberi katera ekipa gre naprej.")
+                return
+        else:
+            napredujoca = izbrana["ekipa1"] if gd > gg else izbrana["ekipa2"]
+
+        self._log(self._izl_log, f"\n🏆  Začetek obdelave tekme {izbrana['stage']} …")
+        self._izl_progress["value"] = 0
+
+        def _po_obdelavi(log_cb):
+            def _progress(val):
+                self._izl_progress.configure(value=val)
+                self.update_idletasks()
+            obdelaj_izlocilno_tekmo(izbrana, gd, gg, napredujoca, log_cb, _progress)
+            try:
+                zapisi_napredujočo_ekipo(izbrana["vrstica_excela"], napredujoca, log_cb)
+                oznaci_izlocilno_obdelano(izbrana["vrstica_excela"])
+                self._log(self._izl_log,
+                           f"✓  Tekma označena kot obdelana, {napredujoca} napreduje.")
+                self._osveži_izlocilne()
+                self._sprazni_izlocilno()
+            except Exception as e:
+                self._log(self._izl_log,
+                           f"⚠  Napaka pri zaključevanju: {e}")
+
+        self._run_threaded(_po_obdelavi,
+                           lambda m: self._log(self._izl_log, m))
+
+    def _sprazni_izlocilno(self):
+        self._izl_gd.set("")
+        self._izl_gg.set("")
+        self._izbrana_izl = None
+        self._izl_izenaceno.set(False)
+        self._izl_nap_combo.configure(state="disabled")
+        self._izl_nap_combo.set("— izberi —")
+        self._izl_lbl_domaci.configure(text="Goli ekipa 1")
+        self._izl_lbl_gostje.configure(text="Goli ekipa 2")
 
     # ── STRAN: NASTAVITVE ─────────────────────
 
     def _build_nastavitve(self, parent):
         parent.columnconfigure(0, weight=1)
         parent.columnconfigure(1, weight=1)
-        parent.rowconfigure(3, weight=1)
+        parent.rowconfigure(4, weight=1)
 
         tk.Label(parent, text="Nastavitve",
                  bg=DARK, fg=FG, font=FONT_HEAD,
@@ -1135,10 +1742,18 @@ class SP2026App(tk.Tk):
         self._n_ime_col    = self._labeled_entry(rcols, "Stolpec imen",     IME_COLUMN, 12)
         self._n_tek_sheet  = self._labeled_entry(rcols, "Indeks lista – tekme",   "0", 6)
         self._n_sk_sheet   = self._labeled_entry(rcols, "Indeks lista – skupine", "1", 6)
+        self._n_izl_sheet  = self._labeled_entry(rcols, "Indeks lista – izločilni", "2", 6)
+
+        # Kartica – izločilni del
+        izl = self._card(parent, "Izločilni del", row=2, col=1)
+        self._n_napovedi_izl  = self._labeled_entry(izl, "Mapa napovedi (izločilni)",    NAPOVEDI_MAPA_IZL, 36)
+        self._n_rezultati_izl = self._labeled_entry(izl, "Excel rezultatov (izločilni)", REZULTATI_FILE_IZL, 36)
+        self._n_ime_cell_izl  = self._labeled_entry(izl, "Celica z imenom (izločilni)",  IME_CELL_IZL, 12)
+        self._n_ime_col_izl   = self._labeled_entry(izl, "Stolpec imen (izločilni)",     IME_COLUMN_IZL, 12)
 
         # Gumbi
         btn_row = tk.Frame(parent, bg=DARK)
-        btn_row.grid(row=2, column=1, sticky="sw", padx=8, pady=6)
+        btn_row.grid(row=3, column=1, sticky="sw", padx=8, pady=6)
         self._btn(btn_row, "✓  Shrani nastavitve",
                   self._shrani_nastavitve, GREEN).pack(side="left", padx=(0, 8))
         self._btn(btn_row, "↺  Ponastavi",
@@ -1147,13 +1762,14 @@ class SP2026App(tk.Tk):
         # Status
         self._n_status = tk.Label(parent, text="", bg=DARK, fg=GREEN,
                                   font=FONT_LABEL)
-        self._n_status.grid(row=3, column=0, columnspan=2,
+        self._n_status.grid(row=4, column=0, columnspan=2,
                             sticky="w", padx=18, pady=4)
 
     def _shrani_nastavitve(self):
         global NAPOVEDI_MAPA, REZULTATI_FILE, TEKME_FILE
         global IME_CELL, DOMACI_COL, GOST_COL, TOCKE_COL, IME_COLUMN
-        global TEKME_SHEET_IDX, SKUPINE_SHEET_IDX
+        global TEKME_SHEET_IDX, SKUPINE_SHEET_IDX, IZLOCILNI_SHEET_IDX
+        global NAPOVEDI_MAPA_IZL, REZULTATI_FILE_IZL, IME_CELL_IZL, IME_COLUMN_IZL
 
         NAPOVEDI_MAPA      = self._n_napovedi.get().strip()
         REZULTATI_FILE     = self._n_rezultati.get().strip()
@@ -1163,24 +1779,30 @@ class SP2026App(tk.Tk):
         GOST_COL           = self._n_gost_col.get().strip().upper()
         TOCKE_COL          = self._n_tocke_col.get().strip().upper()
         IME_COLUMN         = self._n_ime_col.get().strip().upper()
+        NAPOVEDI_MAPA_IZL  = self._n_napovedi_izl.get().strip()
+        REZULTATI_FILE_IZL = self._n_rezultati_izl.get().strip()
+        IME_CELL_IZL       = self._n_ime_cell_izl.get().strip().upper()
+        IME_COLUMN_IZL     = self._n_ime_col_izl.get().strip().upper()
         try:
-            TEKME_SHEET_IDX   = int(self._n_tek_sheet.get())
-            SKUPINE_SHEET_IDX = int(self._n_sk_sheet.get())
+            TEKME_SHEET_IDX     = int(self._n_tek_sheet.get())
+            SKUPINE_SHEET_IDX   = int(self._n_sk_sheet.get())
+            IZLOCILNI_SHEET_IDX = int(self._n_izl_sheet.get())
         except ValueError:
             pass
 
-        # Osveži slovar imen v ozadju
-        self._n_status.configure(text="Nastavitve shranjene. Osveževanje slovarja imen …", fg=FG2)
-        def _reload():
-            try:
-                napolni_slovar_imen()
-                self.after(0, lambda: self._n_status.configure(
-                    text=f"✓  Naloženih {len(IMENA_VRSTICE)} imen.", fg=GREEN))
-            except Exception as e:
-                self.after(0, lambda: self._n_status.configure(
-                    text=f"✗  Napaka pri nalaganju: {e}", fg=RED))
+        # Osveži slovarja imen v ozadju
+        self._n_status.configure(text="Nastavitve shranjene. Osveževanje slovarjev imen …", fg=FG2)
+        self.update_idletasks()
+        try:
+            napolni_slovar_imen()
+            napolni_slovar_imen_izl()
+            self._n_status.configure(
+                text=f"✓  Naloženih {len(IMENA_VRSTICE)} imen (predtekm.), "
+                     f"{len(IMENA_VRSTICE_IZL)} imen (izločilni).", fg=GREEN)
+        except Exception as e:
+            self._n_status.configure(
+                text=f"✗  Napaka pri nalaganju: {e}", fg=RED)
         shrani_config()
-        threading.Thread(target=_reload, daemon=True).start()
 
     def _refresh_globals(self):
         """Nastavi Entry vrednosti iz trenutnih globalnih spremenljivk."""
@@ -1195,6 +1817,11 @@ class SP2026App(tk.Tk):
             (self._n_ime_col,    IME_COLUMN),
             (self._n_tek_sheet,  str(TEKME_SHEET_IDX)),
             (self._n_sk_sheet,   str(SKUPINE_SHEET_IDX)),
+            (self._n_izl_sheet,  str(IZLOCILNI_SHEET_IDX)),
+            (self._n_napovedi_izl,  NAPOVEDI_MAPA_IZL),
+            (self._n_rezultati_izl, REZULTATI_FILE_IZL),
+            (self._n_ime_cell_izl,  IME_CELL_IZL),
+            (self._n_ime_col_izl,   IME_COLUMN_IZL),
         ]
         # Entry varibale so dostopne le po inicializaciji
         try:
