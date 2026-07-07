@@ -128,16 +128,17 @@ def vrni_tip(d, g):
 
 def napolni_slovar_imen():
     global IMENA_VRSTICE
-    app = xw.App(visible=False)
-    try:
-        wb  = app.books.open(REZULTATI_FILE)
-        ws  = wb.sheets[0]
-        imena = ws.range(f"{IME_COLUMN}3").expand("down").value
-        if imena:
-            IMENA_VRSTICE = {ime.strip().title(): i for i, ime in enumerate(imena, start=3)}
-        wb.close()
-    finally:
-        app.quit()
+    if os.path.isfile(REZULTATI_FILE):
+        app = xw.App(visible=False)
+        try:
+            wb  = app.books.open(REZULTATI_FILE)
+            ws  = wb.sheets[0]
+            imena = ws.range(f"{IME_COLUMN}3").expand("down").value
+            if imena:
+                IMENA_VRSTICE = {ime.strip().title(): i for i, ime in enumerate(imena, start=3)}
+            wb.close()
+        finally:
+            app.quit()
 
 def obdelaj_tekmo(vrsticaNapovedi, goliDomaciRez, goliGostjeRez, stolpecRez, log_cb, progress_cb=None):
     tipRez = vrni_tip(goliDomaciRez, goliGostjeRez)
