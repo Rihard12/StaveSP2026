@@ -152,7 +152,7 @@ def obdelaj_tekmo(vrsticaNapovedi, goliDomaciRez, goliGostjeRez, stolpecRez, log
         for i, file in enumerate(files):
             path = os.path.join(NAPOVEDI_MAPA, file)
             try:
-                wbn = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                wbn = openpyxl.load_workbook(path, data_only=True)
                 wsn = wbn.worksheets[0]
                 ime  = wsn[IME_CELL].value.strip().title()
                 vr   = IMENA_VRSTICE.get(ime)
@@ -195,7 +195,7 @@ def obdelaj_skupino(skupina, vrsticaNapoved, stolpecNapoved, stolpecRez, ekipe, 
         for i, file in enumerate(files):
             path = os.path.join(NAPOVEDI_MAPA, file)
             try:
-                wbn = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                wbn = openpyxl.load_workbook(path, data_only=True)
                 wsn = wbn.worksheets[0]
                 ime = wsn[IME_CELL].value.strip().title()
                 vr  = IMENA_VRSTICE.get(ime)
@@ -291,7 +291,7 @@ def igralec_je_izpadel(napoved_path, ime_cell, preostale_ekipe, tekme_neobdelane
     if not preostale_ekipe:
         return False  # ni podatkov o tekmah – ne moremo soditi, privzeto ne pobarvaj
     try:
-        wb = openpyxl.load_workbook(napoved_path, read_only=True, data_only=True)
+        wb = openpyxl.load_workbook(napoved_path, data_only=True)
         ws = wb.worksheets[0]
         kandidat_najden = False
         for t in tekme_neobdelane:
@@ -605,6 +605,81 @@ def razdeli_celico(ref):
     if not m: return None, None
     return m.group(1).upper(), int(m.group(2))
 
+def stolpec_gola(ws, col, row):
+    """
+    Vrne pravilen stolpec (kot črka) za gol, ki je takoj desno od celice imena
+    (col, row). Če je celica imena del merge obsega (npr. K19:L22), gol ni v
+    col+1 (kar bi padlo znotraj istega merge-a in vrnilo None), ampak v stolpcu
+    takoj za KONCEM tega merge obsega.
+    """
+    col_idx = column_index_from_string(col)
+    konec_col_idx = col_idx
+    for mc in ws.merged_cells.ranges:
+        if mc.min_row <= row <= mc.max_row and mc.min_col <= col_idx <= mc.max_col:
+            konec_col_idx = mc.max_col
+            break
+    return get_column_letter(konec_col_idx + 1)
+
+def mozne_ekipe_za_slot(celica, tekme, obiskane=None):
+    """
+    Rekurzivno poišče vse ekipe, ki lahko teoretično pristanejo v dani celici
+    (npr. 'E11'), sledeč verigi 'polje_nap' -> 'polje_e1'/'polje_e2' nazaj do R16,
+    kjer so Ekipa1/Ekipa2 že znana imena.
+
+    Pomembno: za R16 tekme je Ekipa1/Ekipa2 znana VNAPREJ (pred kakršnokoli obdelavo) –
+    to je edina možna ekipa za ta slot. Za vse kasnejše faze (R8, R4, R2, FIN) postane
+    Ekipa1/Ekipa2 znana šele PO obdelavi prejšnjega kroga in predstavlja dejanski
+    rezultat napovedovanja, ne nabor možnih napovedi – zato moramo za te faze VEDNO
+    slediti verigi nazaj do R16, ne glede na to, ali je Ekipa1/Ekipa2 že zapisana.
+
+    celica: oznaka celice kot string (npr. 'E11') ali že znano ime ekipe.
+    tekme: seznam vseh tekem iz preberi_izlocilne_iz_excela().
+    Vrne množico imen ekip (kot so zapisane v Ekipa1/Ekipa2, originalna velikost črk).
+    """
+    if obiskane is None:
+        obiskane = set()
+    if not celica:
+        return set()
+    celica_norm = str(celica).strip().upper()
+    if celica_norm in obiskane:
+        return set()  # varovalo pred ciklom
+    obiskane.add(celica_norm)
+
+    # Če celica ni oblike "črka+številka" (npr. je že ime ekipe), vrni jo kot tako
+    col, row = razdeli_celico(celica_norm)
+    if col is None:
+        return {str(celica).strip()}
+
+    # Poišči tekmo, kjer se celica ujema z polje_e1 ali polje_e2 (znan slot te faze)
+    for t in tekme:
+        je_r16 = str(t["stage"]).strip().upper() == "R16"
+        if t["polje_e1"] and str(t["polje_e1"]).strip().upper() == celica_norm:
+            if je_r16 and t["ekipa1"]:  # R16 – ekipa znana vnaprej, edina možnost
+                return {str(t["ekipa1"]).strip()}
+            # R8+ – ne glede na to, ali je Ekipa1 že zapisana (dejanski rezultat),
+            # kandidati za validacijo izhajajo iz izvornih R16 ekip
+            return _ekipe_prejsnje_tekme(celica_norm, tekme, obiskane)
+        if t["polje_e2"] and str(t["polje_e2"]).strip().upper() == celica_norm:
+            if je_r16 and t["ekipa2"]:
+                return {str(t["ekipa2"]).strip()}
+            return _ekipe_prejsnje_tekme(celica_norm, tekme, obiskane)
+
+    # Ni najdene tekme s tem slotom – morda je to neposredno ime ekipe
+    return {str(celica).strip()}
+
+def _ekipe_prejsnje_tekme(celica_norm, tekme, obiskane):
+    """
+    Poišče tekmo, katere 'polje_nap' je enak celica_norm, in vrne unijo možnih ekip
+    obeh strani te tekme (rekurzivno).
+    """
+    for t in tekme:
+        if t["polje_nap"] and str(t["polje_nap"]).strip().upper() == celica_norm:
+            ekipe = set()
+            ekipe |= mozne_ekipe_za_slot(t["polje_e1"], tekme, obiskane)
+            ekipe |= mozne_ekipe_za_slot(t["polje_e2"], tekme, obiskane)
+            return ekipe
+    return set()
+
 def zapisi_napredujočo_ekipo(vrstica_excela, ime_ekipe, log_cb):
     """
     Po obdelavi tekme zapiše napovedano napredujočo ekipo v ustrezno polje
@@ -684,7 +759,7 @@ def obdelaj_izlocilno_tekmo(tekma, gd, gg, napredujoca_ekipa, log_cb, progress_c
         for i, file in enumerate(files):
             path = os.path.join(NAPOVEDI_MAPA_IZL, file)
             try:
-                wbn = openpyxl.load_workbook(path, read_only=True, data_only=True)
+                wbn = openpyxl.load_workbook(path, data_only=True)
                 wsn = wbn.worksheets[0]
                 ime = wsn[IME_CELL_IZL].value.strip().title()
                 vr  = IMENA_VRSTICE_IZL.get(ime)
@@ -696,32 +771,62 @@ def obdelaj_izlocilno_tekmo(tekma, gd, gg, napredujoca_ekipa, log_cb, progress_c
                 napoved_e1 = str(celica_e1).strip() if celica_e1 else ""
                 napoved_e2 = str(celica_e2).strip() if celica_e2 else ""
 
-                match_e1, proc_e1 = razreši_z_aliasi(napoved_e1, ekipe_polne, ekipe_originalne) if napoved_e1 else (None, 0)
-                match_e2, proc_e2 = razreši_z_aliasi(napoved_e2, ekipe_polne, ekipe_originalne) if napoved_e2 else (None, 0)
+                # Preberi napovedan rezultat (gol je v stolpcu desno od KONCA merge obsega imena)
+                gol1_col = stolpec_gola(wsn, col_e1, row_e1)
+                gol2_col = stolpec_gola(wsn, col_e2, row_e2)
+                gol1 = wsn[f"{gol1_col}{row_e1}"].value
+                gol2 = wsn[f"{gol2_col}{row_e2}"].value
 
-                pravilen_par = (proc_e1 >= PRAG_VALIDACIJE and proc_e2 >= PRAG_VALIDACIJE and
+                if str(tekma["stage"]).strip().upper() == "3M":
+                    # Tekma za 3. mesto: vrstni red zgornja/spodnja ekipa ni intuitiven,
+                    # zato preverimo obe možni razporeditvi in vzamemo boljšo.
+                    match_e1, proc_e1 = razreši_z_aliasi(napoved_e1, ekipe_polne, ekipe_originalne) if napoved_e1 else (None, 0)
+                    match_e2, proc_e2 = razreši_z_aliasi(napoved_e2, ekipe_polne, ekipe_originalne) if napoved_e2 else (None, 0)
+
+                    par_a_ok = (proc_e1 >= PRAG_VALIDACIJE and proc_e2 >= PRAG_VALIDACIJE and
                                 match_e1 == ekipe_polne[0] and match_e2 == ekipe_polne[1])
+                    par_b_ok = (proc_e1 >= PRAG_VALIDACIJE and proc_e2 >= PRAG_VALIDACIJE and
+                                match_e1 == ekipe_polne[1] and match_e2 == ekipe_polne[0])
 
-                # Preberi napovedan rezultat (gol je en stolpec desno od imena)
-                gol1 = wsn[f"{get_column_letter(column_index_from_string(col_e1)+1)}{row_e1}"].value
-                gol2 = wsn[f"{get_column_letter(column_index_from_string(col_e2)+1)}{row_e2}"].value
+                    if par_a_ok:
+                        pravilen_par = True
+                        gol1_uskl, gol2_uskl = gol1, gol2  # zaporedje že ustreza ekipa1:ekipa2
+                    elif par_b_ok:
+                        pravilen_par = True
+                        gol1_uskl, gol2_uskl = gol2, gol1  # igralec je napovedal obratno, zamenjamo gole
+                    else:
+                        pravilen_par = False
+                        gol1_uskl, gol2_uskl = gol1, gol2
+                else:
+                    match_e1, proc_e1 = razreši_z_aliasi(napoved_e1, ekipe_polne, ekipe_originalne) if napoved_e1 else (None, 0)
+                    match_e2, proc_e2 = razreši_z_aliasi(napoved_e2, ekipe_polne, ekipe_originalne) if napoved_e2 else (None, 0)
+                    pravilen_par = (proc_e1 >= PRAG_VALIDACIJE and proc_e2 >= PRAG_VALIDACIJE and
+                                    match_e1 == ekipe_polne[0] and match_e2 == ekipe_polne[1])
+                    gol1_uskl, gol2_uskl = gol1, gol2
 
                 tocke_tekma = 0
+                razlog_nic = None
                 if pravilen_par:
-                    try:
-                        gol1n, gol2n = int(gol1), int(gol2)
-                        if gol1n == gd and gol2n == gg:
-                            tocke_tekma = 6
-                            stat["rezultat"] += 1
-                        elif vrni_tip(gol1n, gol2n) == tip_rez:
-                            tocke_tekma = 3
-                            stat["tip"] += 1
-                        else:
-                            stat["nic"] += 1
-                    except (TypeError, ValueError):
+                    if gol1_uskl is None or gol2_uskl is None:
                         stat["nic"] += 1
+                        razlog_nic = "manjka rezultat"
+                    else:
+                        try:
+                            gol1n, gol2n = int(gol1_uskl), int(gol2_uskl)
+                            if gol1n == gd and gol2n == gg:
+                                tocke_tekma = 6
+                                stat["rezultat"] += 1
+                            elif vrni_tip(gol1n, gol2n) == tip_rez:
+                                tocke_tekma = 3
+                                stat["tip"] += 1
+                            else:
+                                stat["nic"] += 1
+                        except (TypeError, ValueError):
+                            stat["nic"] += 1
+                            razlog_nic = "neveljaven rezultat"
                 else:
                     stat["nic"] += 1
+                    razlog_nic = "manjka/napačno ime ekipe"
 
                 ws.range(f"{col_rez_tip}{vr}").value = tocke_tekma
 
@@ -738,7 +843,8 @@ def obdelaj_izlocilno_tekmo(tekma, gd, gg, napredujoca_ekipa, log_cb, progress_c
 
                 wbn.close()
                 logging.info(f"{ime} | {tekma['stage']} {ekipa1}:{ekipa2} | tekma={tocke_tekma}, napr={tocke_nap}")
-                log_cb(f"✓  {ime}: {tocke_tekma} (tekma) + {tocke_nap} (napredovanje)")
+                dodatek = f"  ({razlog_nic})" if razlog_nic else ""
+                log_cb(f"✓  {ime}: {tocke_tekma} (tekma) + {tocke_nap} (napredovanje){dodatek}")
             except Exception as e:
                 stat["napake"] += 1
                 logging.error(f"NAPAKA {file}: {e}")
@@ -779,12 +885,12 @@ SKUPINE_SP2026 = {
 ALIASI_EKIP = {
     "BOSNA IN HERCEGOVINA": ["BIH", "BOSNA"],
     "ZDRUŽENE DRŽAVE AMERIKE": ["ZDA", "USA", "AMERIKA"],
-    "SLONOKOŠČENA OBALA": ["IVORY COAST", "SLONOKOŠČENA O.", "CÔTE D'IVOIRE", "COTE D'IVOIRE", "SLONOK. OBALA", "SLONOKOSCEN O.", "SL.OBALA", "SLONOKOSCENA O."],
+    "SLONOKOŠČENA OBALA": ["SLONOK.O .", "SLONOKO. O.", "IVORY COAST", "SLONOKOŠČENA O.", "CÔTE D'IVOIRE", "COTE D'IVOIRE", "SLONOK. OBALA", "SLONOKOSCEN O.", "SL.OBALA", "SLONOKOSCENA O.", "SLONOK. O."],
     "JUŽNA KOREJA": ["KOREJA", "KOREA", "J KOREJA", "J. KOREJA", "J.KOREJA", "SOUTH KOREA", "J. KOREA"],
     "JUŽNA AFRIKA": ["JAR", "RSA", "J. AFRIKA", "J AFRIKA", "J.AFRIKA", "JUŽNOAFRIŠKA REPUBLIKA", "SOUTH AFRICA", "J. AFRKA"],
     "NOVA ZELANDIJA": ["N ZELANDIJA", "N. ZELANDIJA", "N.ZELANDIJA", "N.ZELENDIJA", "N. ZELENDIJA"],
     "SAVDSKA ARABIJA": ["SAU.ARABIJA", "SAV. ARABIA", "S. ARABIJA", "SAV. ARABIJA", "SAV.ARABIJA", "S ARABIJA", "S.ARABIJA", "SAV ARABIJA", "SAU ARABIJA", "SA.ARABIJA", "SAUDI ARABIA", "SAU. ARABIJA"],
-    "ZELENORTSKI OTOKI": ["ZELENORTSKI O.", "Z. OTOKI", "CAPE VERDE", "ZELENORTSKI.O", "ZELENO R OTOKI", "ZELENOERTSKI", "KAPVERDSKI OTOKI", "ZEL.OTOKI", "ZELENORTSKI.O."],
+    "ZELENORTSKI OTOKI": ["Z.OSTRVA", "ZELE.OTOKI", "KAPVERDSKI O.", "KAPVERD.OTOKI", "ZELENO. OTO.", "ZELENORTSKI O.", "Z. OTOKI", "CAPE VERDE", "ZELENORTSKI.O", "ZELENO R OTOKI", "ZELENOERTSKI", "KAPVERDSKI OTOKI", "ZEL.OTOKI", "ZELENORTSKI.O."],
     "DR KONGO": ["DRC", "CONGO DR", "D.R. KONGO", "D.R.KONGO", "D. R. KONGO", "D.R.", "CONGO", "KONGO"],
     "CURACAO": ["CURAÇAO"],
     "FRANCIJA": ["FRANCOSKA"],
@@ -792,7 +898,7 @@ ALIASI_EKIP = {
     "NEMČIJA": ["NEMCIJA"],
     "ČEŠKA": ["CESKA", "ČESKA"],
     "JORDAN": ["JORDANIJA"],
-    "ALŽIRIJA": ["ALĐERIJA"],
+    "ALŽIRIJA": ["ALĐERIJA", "ALZ"],
     "ŠVICA": ["SVICA"],
     "KATAR": ["QATAR"],
     "KANADA": ["CANADA"],
@@ -802,6 +908,10 @@ ALIASI_EKIP = {
     "HRVAŠKA": ["CROATIA"],
     "IRAK": ["IRAQ"],
     "ŠKOTSKA": ["SCOTLAND"],
+    "NIZOZEMSKA": ["NIZOZEMCI"],
+    "BIH": ["BOSNA"],
+    "J. AFRIKA": ["JAR"],
+    "EKVADOR": ["ECUADOR"]
 }
 
 def razreši_z_aliasi(vnos, ekipe_polna, ekipe_originalne):
@@ -842,7 +952,7 @@ def validiraj_napovedi_skupin(skupine_ekipe, log_cb):
         path = os.path.join(NAPOVEDI_MAPA, file)
         problemi_datoteke = []
         try:
-            wbn = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            wbn = openpyxl.load_workbook(path, data_only=True)
             wsn = wbn.worksheets[0]
             ime = wsn[IME_CELL].value.strip().title()
 
@@ -877,6 +987,127 @@ def validiraj_napovedi_skupin(skupine_ekipe, log_cb):
         log_cb("✓  Vse napovedi so v redu – ni problematičnih vnosov.")
     else:
         log_cb(f"⚠  Najdenih {len(problemi)} datotek s problemi:\n")
+        for ime, file, pp in problemi:
+            log_cb(f"▸  {ime}  ({file})")
+            for p in pp:
+                log_cb(p)
+            log_cb("")
+
+def validiraj_napovedi_izlocilnih(log_cb):
+    """
+    Gre čez vse napovedi izločilnega dela in za VSAKO še neobdelano tekmo
+    (ne le tiste z že znano Ekipa1/Ekipa2) preveri:
+    1. Popolnost vnosa (ime ekipe1, ime ekipe2, rezultat, napredujoča ekipa).
+    2. Pravilnost vnesenih imen ekip – primerjano s kandidati, ki teoretično
+       lahko pristanejo na tem mestu bracketa (rekurzivno nazaj do R16).
+       Za 3. mesto (ni sledljivo prek polje_nap) se preveri samo popolnost.
+    """
+    vse_tekme = preberi_izlocilne_iz_excela()
+    tekme = [t for t in vse_tekme if str(t["obdelana"] or "").upper() != "D"]
+
+    if not tekme:
+        log_cb("ℹ  Ni neobdelanih tekem za preverjanje.")
+        return
+
+    # Vnaprej izračunaj kandidate za vsak slot (polje_e1/polje_e2), da se izognemo
+    # ponovnemu rekurzivnemu računanju za vsako napoved datoteko posebej.
+    kandidati_cache = {}
+    def kandidati_za(polje):
+        if not polje:
+            return set()
+        key = str(polje).strip().upper()
+        if key not in kandidati_cache:
+            kandidati_cache[key] = mozne_ekipe_za_slot(polje, vse_tekme)
+        return kandidati_cache[key]
+
+    files = [f for f in os.listdir(NAPOVEDI_MAPA_IZL) if f.endswith(".xlsx") and not f.startswith("~")]
+    problemi = []
+    log_cb(f"Preverjam {len(files)} napovedi za {len(tekme)} neobdelanih tekem …\n")
+
+    for file in files:
+        path = os.path.join(NAPOVEDI_MAPA_IZL, file)
+        problemi_datoteke = []
+        try:
+            wbn = openpyxl.load_workbook(path, data_only=True)
+            wsn = wbn.worksheets[0]
+            ime_cell_val = wsn[IME_CELL_IZL].value
+            ime = ime_cell_val.strip().title() if ime_cell_val else file
+
+            for t in tekme:
+                naziv_tekme = (f"{t['stage']} {t['ekipa1']} : {t['ekipa2']}"
+                               if t["ekipa1"] and t["ekipa2"] else f"{t['stage']} (vrstica {t['vrstica_excela']})")
+
+                kand_e1 = kandidati_za(t["polje_e1"])
+                kand_e2 = kandidati_za(t["polje_e2"])
+                kand_oba = kand_e1 | kand_e2  # za napredujočo ekipo – lahko je iz katerekoli strani
+                kand_oba_polna = [e.upper() for e in kand_oba]
+                kand_oba_orig = list(kand_oba)
+
+                col_e1, row_e1 = razdeli_celico(t["polje_e1"])
+                col_e2, row_e2 = razdeli_celico(t["polje_e2"])
+                col_nap, row_nap = razdeli_celico(t["polje_nap"]) if t["polje_nap"] else (None, None)
+
+                # Ime ekipe 1 – popolnost + pravilnost (če imamo kandidate)
+                e1 = wsn[f"{col_e1}{row_e1}"].value if col_e1 else None
+                if not e1:
+                    problemi_datoteke.append(f"  {naziv_tekme}: manjka napoved ekipe 1 ({t['polje_e1']})")
+                elif kand_e1:
+                    kand_e1_polna = [e.upper() for e in kand_e1]
+                    match1, proc1 = razreši_z_aliasi(str(e1).strip(), kand_e1_polna, list(kand_e1))
+                    if proc1 < PRAG_VALIDACIJE:
+                        problemi_datoteke.append(
+                            f"  {naziv_tekme}: napoved ekipe 1 '{e1}' → najbližje "
+                            f"'{match1.title()}' ({proc1:.0f}%) ({t['polje_e1']})")
+
+                # Ime ekipe 2 – popolnost + pravilnost (če imamo kandidate)
+                e2 = wsn[f"{col_e2}{row_e2}"].value if col_e2 else None
+                if not e2:
+                    problemi_datoteke.append(f"  {naziv_tekme}: manjka napoved ekipe 2 ({t['polje_e2']})")
+                elif kand_e2:
+                    kand_e2_polna = [e.upper() for e in kand_e2]
+                    match2, proc2 = razreši_z_aliasi(str(e2).strip(), kand_e2_polna, list(kand_e2))
+                    if proc2 < PRAG_VALIDACIJE:
+                        problemi_datoteke.append(
+                            f"  {naziv_tekme}: napoved ekipe 2 '{e2}' → najbližje "
+                            f"'{match2.title()}' ({proc2:.0f}%) ({t['polje_e2']})")
+
+                # Rezultat (gol je v stolpcu desno od KONCA merge obsega imena)
+                if col_e1:
+                    gol1_col = stolpec_gola(wsn, col_e1, row_e1)
+                    gol1 = wsn[f"{gol1_col}{row_e1}"].value
+                    if gol1 is None:
+                        problemi_datoteke.append(f"  {naziv_tekme}: manjka rezultat ekipe 1 ({gol1_col}{row_e1})")
+                if col_e2:
+                    gol2_col = stolpec_gola(wsn, col_e2, row_e2)
+                    gol2 = wsn[f"{gol2_col}{row_e2}"].value
+                    if gol2 is None:
+                        problemi_datoteke.append(f"  {naziv_tekme}: manjka rezultat ekipe 2 ({gol2_col}{row_e2})")
+
+                # Napredujoča ekipa – popolnost + pravilnost (mora ustrezati eni od kandidatov obeh strani)
+                if col_nap:
+                    nap = wsn[f"{col_nap}{row_nap}"].value
+                    if not nap:
+                        problemi_datoteke.append(
+                            f"  {naziv_tekme}: manjka napoved napredujoče ekipe ({t['polje_nap']})")
+                    elif kand_oba:
+                        match_nap, proc_nap = razreši_z_aliasi(str(nap).strip(), kand_oba_polna, kand_oba_orig)
+                        if proc_nap < PRAG_VALIDACIJE:
+                            problemi_datoteke.append(
+                                f"  {naziv_tekme}: napredujoča ekipa '{nap}' → najbližje "
+                                f"'{match_nap.title()}' ({proc_nap:.0f}%) ({t['polje_nap']})")
+
+            wbn.close()
+
+            if problemi_datoteke:
+                problemi.append((ime, file, problemi_datoteke))
+
+        except Exception as e:
+            log_cb(f"✗  {file}: {e}")
+
+    if not problemi:
+        log_cb("✓  Vse napovedi so popolne in pravilne za vse neobdelane tekme.")
+    else:
+        log_cb(f"⚠  Najdenih {len(problemi)} datotek z manjkajočimi vnosi:\n")
         for ime, file, pp in problemi:
             log_cb(f"▸  {ime}  ({file})")
             for p in pp:
@@ -1454,20 +1685,20 @@ class SP2026App(tk.Tk):
 
     def _build_preveri(self, parent):
         parent.columnconfigure(0, weight=1)
-        parent.columnconfigure(1, weight=2)
+        parent.columnconfigure(1, weight=1)
         parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(2, weight=1)
 
-        tk.Label(parent, text="Preveri napovedi skupin",
+        tk.Label(parent, text="Preveri napovedi",
                  bg=DARK, fg=FG, font=FONT_HEAD,
                  pady=16).grid(row=0, column=0, columnspan=2, sticky="w", padx=18)
 
-        left = self._card(parent, "Nastavitve", row=1, col=0)
+        left = self._card(parent, "Preveri imena ekip v skupinah", row=1, col=0)
 
         tk.Label(left, text=(
             "Preveri, ali napovedi vseh uporabnikov\n"
             "vsebujejo prepoznavna imena ekip za vsako skupino.\n\n"
-            "Referenčna imena so vgrajena v kodo (SP 2026).\n"
-            "Problematični vnosi bodo izpisani v dnevniku."
+            "Referenčna imena so vgrajena v kodo (SP 2026)."
         ), bg=CARD, fg=FG2, font=FONT_LABEL, justify="left").pack(anchor="w", pady=(0, 16))
 
         tk.Label(left, text="Prag ujemanja (%)", bg=CARD, fg=FG2,
@@ -1485,7 +1716,24 @@ class SP2026App(tk.Tk):
                   self._zacni_validacijo, ACCENT).pack(anchor="w")
 
         right = self._card(parent, "Rezultati preverjanja", row=1, col=1)
-        self._preveri_log = self._log_box(right, rows=24)
+        self._preveri_log = self._log_box(right, rows=14)
+
+        # Drugi panel – popolnost vnosov izločilnih tekem
+        left2 = self._card(parent, "Preveri popolnost vnosov – izločilni del", row=2, col=0)
+
+        tk.Label(left2, text=(
+            "Gre čez vse napovedi in preveri vse neobdelane tekme\n"
+            "(tudi R8/R4/R2/FIN, kjer ekipi še nista znani) – preveri\n"
+            "izpolnjenost in pravilnost imen glede na ekipe, ki teoretično\n"
+            "lahko pridejo v ta del bracketa. Pri tekmi za 3. mesto se\n"
+            "preverja samo izpolnjenost. Uporablja isti prag kot zgoraj."
+        ), bg=CARD, fg=FG2, font=FONT_LABEL, justify="left").pack(anchor="w", pady=(0, 16))
+
+        self._btn(left2, "🔍  Preveri izločilne vnose",
+                  self._zacni_validacijo_izl, ACCENT).pack(anchor="w")
+
+        right2 = self._card(parent, "Rezultati preverjanja – izločilni", row=2, col=1)
+        self._preveri_izl_log = self._log_box(right2, rows=14)
 
     def _zacni_validacijo(self):
         global PRAG_VALIDACIJE
@@ -1521,6 +1769,11 @@ class SP2026App(tk.Tk):
                   f"\n🔍  Začetek preverjanja {len(skupine_ekipe)} skupin …\n")
         self._run_threaded(validiraj_napovedi_skupin, skupine_ekipe,
                            lambda m: self._log(self._preveri_log, m))
+
+    def _zacni_validacijo_izl(self):
+        self._log(self._preveri_izl_log, "\n🔍  Začetek preverjanja izločilnih vnosov …\n")
+        self._run_threaded(validiraj_napovedi_izlocilnih,
+                           lambda m: self._log(self._preveri_izl_log, m))
 
     # ── STRAN: PRENESI V IZLOČILNE ────────────────
 
